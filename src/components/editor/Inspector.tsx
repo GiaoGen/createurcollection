@@ -24,6 +24,15 @@ export function Inspector({ className = "" }: { className?: string }) {
   const Panel = PANELS[mode];
   return (
     <aside className={`${className} flex-col overflow-y-auto bg-[var(--surface)]`}>
+      {/* 模式 Tab（顶部分隔线，非悬浮） */}
+      <div className="shrink-0 border-b border-[var(--line)] p-1 flex gap-1">
+        {(["info", "artwork", "spine", "tracks"] as EditorMode[]).map((m) => (
+          <button key={m} onClick={() => setMode(m)}
+            className={`px-2 py-1 text-xs rounded-md transition-colors ${mode === m ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+            {m}
+          </button>
+        ))}
+      </div>
       <AnimatePresence mode="popLayout" initial={false}>
         <motion.div key={mode} className="p-4 flex-1 min-h-0 overflow-y-auto"
           initial={{ opacity: 0, y: 8 }}
@@ -32,15 +41,6 @@ export function Inspector({ className = "" }: { className?: string }) {
           <Panel />
         </motion.div>
       </AnimatePresence>
-      {/* 模式 Tab（顶部分隔线，非悬浮） */}
-      <div className="shrink-0 border-t border-[var(--line)] p-1 flex gap-1">
-        {(["info", "artwork", "spine", "tracks"] as EditorMode[]).map((m) => (
-          <button key={m} onClick={() => setMode(m)}
-            className={`px-2 py-1 text-xs rounded-md transition-colors ${mode === m ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
-            {m}
-          </button>
-        ))}
-      </div>
       <div className="shrink-0 border-t border-[var(--line)] p-2 flex gap-1 text-xs text-[var(--muted)]">
         {(["front", "back", "disc"] as const).map((f) => (
           <button key={f} onClick={() => setFace(f)}
