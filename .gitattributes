@@ -1,0 +1,4 @@
+# cd-showcase-3d skill 的单文件 HTML 原型（内嵌 CDN Three.js）——参考资产，非应用代码。
+# 从 GitHub 语言统计中排除，使仓库语言栏如实反映 TypeScript 代码库（该文件 ~522KB，
+# 若计入会占到 ~50% 字节并让语言栏误报为 HTML 主导）。
+.claude/skills/cd-showcase-3d/assets/template.html linguist-documentation
