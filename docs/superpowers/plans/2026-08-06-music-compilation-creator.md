@@ -1448,8 +1448,13 @@ git add src/components/export src/lib/export-image.ts && git commit -m "feat: 2D
 
 ## Task 13: 移动端 Bottom Sheet
 
+> 设计已确认（2026-08-06）：**补齐 5 个 Tab（含 filters，桌面 Inspector 同步补上）**；**Tab 文案改中文**（信息/封面/滤镜/侧标/曲目；face 选择器同步中文 正面/背面/盘面）；抽共享 `panels.tsx`（PANELS + TAB 列表）；Stage 上移缩小（scale 0.96 + y -8）。此改动同时完成原 Task 6 遗留（模式 Tab 中文）。
+
 **Files:**
-- Create: `src/components/shell/MobileEditorSheet.tsx`
+- Create: `src/components/editor/panels.tsx`（共享 `EDITOR_PANELS` + `EDITOR_TABS` 中文文案）
+- Rewrite: `src/components/shell/MobileEditorSheet.tsx`（占位 → 完整 Bottom Sheet）
+- Modify: `src/components/editor/Inspector.tsx`（用共享模块；补 filters Tab；中文文案）
+- Modify: `src/components/shell/AppShell.tsx`（Stage 上移缩小）
 
 **Interfaces:**
 - Consumes: store `mobileSheetOpen/setMobileSheetOpen/mode/setMode/face/setFace`。

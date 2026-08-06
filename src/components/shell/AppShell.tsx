@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { motion } from "motion/react";
 import { ProjectRail } from "./ProjectRail";
 import { CDStage } from "@/components/stage/CDStage";
 import { Inspector } from "@/components/editor/Inspector";
@@ -14,6 +15,8 @@ import { useCompilationStore } from "@/store/use-compilation-store";
 export function AppShell() {
   const theme = useCompilationStore((s) => s.project.theme);
   const projectTitle = useCompilationStore((s) => s.project.title);
+  // 移动端 Bottom Sheet 打开时 Stage 轻微上移缩小；桌面 Sheet 为 md:hidden 不触发。
+  const mobileSheetOpen = useCompilationStore((s) => s.mobileSheetOpen);
   // 导出失败时显示的轻量提示（成功不提示）。
   const [exportError, setExportError] = useState<string | null>(null);
   // 同步 <html data-theme>：挂载时写一次，之后随 project.theme 变化。
@@ -67,9 +70,13 @@ export function AppShell() {
         <MobileHeader className="md:hidden" />
         {/* 桌面：Stage 与 Inspector 并排 */}
         <div className="flex flex-1 min-h-0">
-          <main className="flex-1 min-h-0 relative">
+          <motion.main
+            className="flex-1 min-h-0 relative"
+            animate={{ scale: mobileSheetOpen ? 0.96 : 1, y: mobileSheetOpen ? -8 : 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 28, mass: 0.8 }}
+          >
             <CDStage />
-          </main>
+          </motion.main>
           <Inspector className="hidden md:flex w-[340px] shrink-0 border-l border-[var(--line)]" />
         </div>
         {/* 桌面 Player 横跨 Stage+Inspector 底部；移动端 Player 在头部下方固定底栏 */}
