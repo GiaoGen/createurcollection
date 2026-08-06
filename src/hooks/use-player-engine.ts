@@ -10,6 +10,9 @@ import { getMusicProvider } from "@/lib/music/provider";
  * 不做任何自动播放：仅用户点击（Play）触发；曲目行点击只选中，不播放。
  */
 let audio: HTMLAudioElement | null = null;
+// 播放调用单调递增 token：快速连点 next/toggle 时，旧 play 的 await 结束晚于新 play，
+// 其 post-await 写 store（成功置 true / 失败置 false）会覆盖新状态，造成 UI 与实际播放不一致。
+let playToken = 0;
 
 function getAudio(): HTMLAudioElement {
   if (!audio) {
@@ -27,12 +30,13 @@ function getAudio(): HTMLAudioElement {
 }
 
 async function play(id: string): Promise<void> {
+  const token = ++playToken;
   const { project, setActiveTrack, setIsPlaying, setProgress } = useCompilationStore.getState();
   const track = project.tracks.find((t) => t.id === id);
   if (!track) return;
   const source = await getMusicProvider().getPlayableSource(track); // 走 Provider，demo 首次合成并缓存
   if (!source) {
-    setIsPlaying(false); // 无源不播，不做假播放
+    if (token === playToken) setIsPlaying(false); // 无源不播，不做假播放；已被更新的 play 取代则不写
     return;
   }
   const a = getAudio();
@@ -45,10 +49,11 @@ async function play(id: string): Promise<void> {
   try {
     await a.play();
   } catch {
-    setIsPlaying(false);
+    // 只有仍是最近一次播放才写 isPlaying，避免被换源 load() 中止的旧 play 覆盖新播放状态
+    if (token === playToken) setIsPlaying(false);
     return;
   }
-  setIsPlaying(true); // play 事件也会置 true，幂等
+  if (token === playToken) setIsPlaying(true); // play 事件也会置 true，幂等
 }
 
 function toggle(): void {
