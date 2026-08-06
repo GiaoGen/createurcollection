@@ -5,8 +5,8 @@ export type FilterId =
 export type SpineStyle = "catalog" | "obi" | "vertical" | "transparent";
 
 /**
- * react-easy-crop 原生坐标系（onCropComplete 的 croppedArea）。
- * x/y/width/height 均为百分比（0-100，相对媒体包围盒），未裁剪时 = { x:0, y:0, width:100, height:100 }。
+ * react-easy-crop 的 croppedAreaPixels：像素坐标（相对旋转后媒体包围盒）。
+ * 由 onCropComplete 的第二参提交；x/y/width/height 均为像素，已含缩放（zoom）造成的区域变化。
  */
 export interface CropArea { x: number; y: number; width: number; height: number; }
 
@@ -14,7 +14,7 @@ export interface CropArea { x: number; y: number; width: number; height: number;
 export interface ArtworkState {
   sourceName: string | null;      // 原始文件名，占位与重置判断
   imageUrl: string | null;        // 处理后图像 URL（喂给纹理 / ExportCard）
-  crop: CropArea;                 // 裁剪区域（0-100%，未裁剪时 = 原图区域）
+  crop: CropArea;                 // 裁剪区域（croppedAreaPixels，像素，已含 zoom）
   zoom: number;                   // 1..3（与 react-easy-crop 默认 maxZoom=3 一致）
   rotation: number;               // 度，-180..180
   filter: FilterId;
@@ -48,5 +48,5 @@ export type EditorMode = "info" | "artwork" | "filters" | "spine" | "tracks";
 export type FaceTarget = "front" | "back" | "disc";
 
 export function blankArtwork(): ArtworkState {
-  return { sourceName: null, imageUrl: null, crop: { x: 0, y: 0, width: 100, height: 100 }, zoom: 1, rotation: 0, filter: "original" };
+  return { sourceName: null, imageUrl: null, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0, filter: "original" };
 }
