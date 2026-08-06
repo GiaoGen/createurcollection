@@ -18,6 +18,7 @@ import { useIsDesktop, DESKTOP_MQ } from "@/lib/use-is-desktop";
 export function AppShell() {
   const theme = useCompilationStore((s) => s.project.theme);
   const projectTitle = useCompilationStore((s) => s.project.title);
+  const setOffline = useCompilationStore((s) => s.setOffline);
   // IndexedDB 引导完成前渲染占位，避免“demo 项目”闪现后切到真实项目（视觉跳变）。
   const hydrated = useCompilationStore((s) => s.hydrated);
   // 移动端 Bottom Sheet 打开时 Stage 轻微上移缩小；桌面 Sheet 为 md:hidden 不触发。
@@ -38,6 +39,17 @@ export function AppShell() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  // 设备在线状态 → setOffline（网易云曲目断网不可播，demo 不受影响；跨 loadProject 存活）。
+  useEffect(() => {
+    const update = () => setOffline(!navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, [setOffline]);
   // reduced-motion：Stage 位移 spring 压不到（JS spring 不归全局 CSS 管），
   // 这里改为瞬态。注意与 M-3 一致：useReducedMotion 是挂载快照非实时订阅。
   const reduced = useReducedMotion();

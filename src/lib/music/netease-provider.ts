@@ -1,4 +1,4 @@
-import type { MusicProvider, PlayableSource, TrackMetadata, TrackSearchResult } from "./types";
+import type { MusicProvider, PlayableSource, PlaybackRefusal, TrackMetadata, TrackSearchResult } from "./types";
 import type { CompilationTrack } from "@/types/compilation";
 import { isNeteaseAvailable, neteaseClient } from "@/lib/netease/client";
 import { loadSession } from "@/lib/netease/auth";
@@ -10,8 +10,8 @@ import type { NeteaseSearchResponse } from "@/lib/netease/types";
  * 网易云真实 Provider（Task 18）：纯前端，浏览器直调第三方 API。
  * - search：/search 无需登录。
  * - resolve：不强制（T19 用 search/歌单直接取曲目），保持 null。
- * - getPlayableSource：携带 Cookie 现取播放地址；未登录/受限/不可播一律返回 null，
- *   由既有引擎 if (!source) 干净处理。availability 语义、受限提示与自动切歌归 T20。
+ * - getPlayableSource：携带 Cookie 现取播放地址；未登录/受限/不可播返回 PlaybackRefusal
+ *   （判别：kind === "audio" 才可播），由引擎分流处理。绝不伪造可播地址。
  */
 export class NeteaseProvider implements MusicProvider {
   isAvailable(): boolean {
@@ -38,16 +38,26 @@ export class NeteaseProvider implements MusicProvider {
     return null;
   }
 
-  async getPlayableSource(track: CompilationTrack): Promise<PlayableSource | null> {
-    if (!isNeteaseAvailable() || track.provider !== "netease" || !track.providerTrackId) return null;
+  async getPlayableSource(track: CompilationTrack): Promise<PlayableSource | PlaybackRefusal | null> {
+    if (track.provider !== "netease") return null; // 分发器只路由 netease 过来；防御性不处理其它
+    if (!isNeteaseAvailable()) return { kind: "unavailable", reason: "网易云未启用" };
     const session = await loadSession();
-    if (!session?.cookie) return null; // 未登录 → null（T20 升级为「请先登录」信号）
+    if (!session?.cookie) return { kind: "auth-required", reason: "请先登录网易云" };
+    if (!track.providerTrackId) return { kind: "unavailable", reason: "缺少网易云歌曲 ID" };
     const res = await getPlaybackUrl(track.providerTrackId, session.cookie);
-    if (res.availability !== "playable" || !res.url) return null; // 受限/无 url → null（T20 升级受限信号）
-    return {
-      url: res.url,
-      kind: "audio",
-      duration: res.durationMs ? Math.round(res.durationMs / 1000) : undefined,
-    };
+    if (res.availability === "playable" && res.url) {
+      return {
+        url: res.url,
+        kind: "audio",
+        duration: res.durationMs ? Math.round(res.durationMs / 1000) : undefined,
+      };
+    }
+    if (res.availability === "vip-required") {
+      return { kind: "restricted", reason: res.reason ?? "VIP/付费歌曲，当前账号暂无播放权限" };
+    }
+    return { kind: "unavailable", reason: res.reason ?? "暂无可播放地址" };
   }
 }
+
+/** 分发器直接引用的单例（provider.ts 按 track.provider 路由到它）。 */
+export const neteaseProvider = new NeteaseProvider();

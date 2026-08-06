@@ -11,6 +11,8 @@ export function TrackEditor() {
   const tracks = useCompilationStore((s) => s.project.tracks);
   const activeTrackId = useCompilationStore((s) => s.project.activeTrackId);
   const isPlaying = useCompilationStore((s) => s.player.isPlaying);
+  const denied = useCompilationStore((s) => s.player.denied);
+  const offline = useCompilationStore((s) => s.offline);
   // 动作经 getState 取稳定引用，避免每帧重渲染；数据订阅如上两行。
   const { updateTrack, removeTrack, addTrack, setActiveTrack, reorderTracks } = useCompilationStore.getState();
   const setPickerOpen = useNeteaseStore((s) => s.setPickerOpen);
@@ -79,6 +81,11 @@ export function TrackEditor() {
               />
             </div>
             <span className="font-mono-num text-xs text-[var(--muted)]">{formatTime((t.durationMs ?? 0) / 1000)}</span>
+            {t.provider === "netease" && (offline || denied[t.id]) ? (
+              <span className="text-[10px] text-[var(--muted)] shrink-0 leading-none">
+                {offline ? "离线" : "受限"}
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={(e) => {

@@ -53,6 +53,7 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
 
   const project = useCompilationStore((s) => s.project);
   const isPlaying = useCompilationStore((s) => s.player.isPlaying);
+  const loading = useCompilationStore((s) => s.player.loading);
   const activeTrackId = useCompilationStore((s) => s.project.activeTrackId);
   const setFace = useCompilationStore((s) => s.setFace);
 
@@ -286,7 +287,7 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
           </group>
           {/* Disc — slides out along +x and spins */}
           <group ref={discGroupRef}>
-            <Disc texture={discTex} isPlaying={isPlaying && !!activeTrackId} />
+            <Disc texture={discTex} isPlaying={isPlaying && !!activeTrackId} loading={loading && !!activeTrackId} />
           </group>
         </group>
       </group>

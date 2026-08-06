@@ -15,9 +15,11 @@ const SPIN_RAD_PER_S = 2.8;
 interface DiscProps {
   texture: THREE.Texture;
   isPlaying: boolean;
+  /** 播放请求加载中：近静止微抖（等待态），不转盘。 */
+  loading?: boolean;
 }
 
-export function Disc({ texture, isPlaying }: DiscProps) {
+export function Disc({ texture, isPlaying, loading = false }: DiscProps) {
   const discRef = useRef<THREE.Mesh>(null);
   const speed = useRef(0);
   const reduced = useReducedMotion();
@@ -32,9 +34,16 @@ export function Disc({ texture, isPlaying }: DiscProps) {
   useFrame((state, dt) => {
     const disc = discRef.current;
     if (!disc) return;
-    // prefers-reduced-motion: keep the disc still.
+    // prefers-reduced-motion: keep the disc still（分支保持最前）。
     if (reduced) {
       speed.current = 0;
+      return;
+    }
+    if (loading) {
+      // 播放请求加载中：近静止微抖等待态，不转盘。
+      speed.current = 0;
+      disc.rotation.z += Math.sin(state.clock.elapsedTime * 4) * 0.0008;
+      state.invalidate();
       return;
     }
     const d = Math.min(dt, 0.05);

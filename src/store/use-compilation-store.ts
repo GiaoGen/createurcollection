@@ -18,7 +18,7 @@ import { storeImage, dataUrlToBlob } from "@/lib/image/blobs";
 
 /**
  * 播放器状态。loading/volume/error 供 Task 18-20（网易云播放 + 受限/离线状态）使用；
- * 本任务先落位字段，播放引擎与 UI 在后续任务接入。
+ * denied 为会话内行级受限标记（loadProject 重置时一并清空）。
  */
 interface PlayerState {
   isPlaying: boolean;
@@ -27,6 +27,8 @@ interface PlayerState {
   loading: boolean;
   volume: number;
   error: string | null;
+  /** 会话内行级受限标记：trackId → 原因类别。loadProject / 成功播放该曲时清除。 */
+  denied: Record<string, "restricted" | "unavailable">;
 }
 
 /** localStorage 偏好键：只存偏好（当前项目 ID / 主题 / 上次编辑模式），不含项目数据。 */
@@ -168,6 +170,8 @@ interface CompilationStore {
   face: FaceTarget;
   mobileSheetOpen: boolean;
   player: PlayerState;
+  /** 设备在线状态（顶层，跨 loadProject 存活；非 player 状态）。 */
+  offline: boolean;
 
   setProjectField: <K extends keyof CompilationProject>(key: K, value: CompilationProject[K]) => void;
   setArtwork: (face: FaceTarget, patch: Partial<ArtworkState>) => void;
@@ -182,11 +186,15 @@ interface CompilationStore {
   setActiveTrack: (id: string | null) => void;
   setIsPlaying: (v: boolean) => void;
   setProgress: (partial: Partial<PlayerState>) => void;
+  /** 标记/清除曲目受限（供行级「受限」标签；kind 为 null 删键）。 */
+  setDenied: (id: string, kind: "restricted" | "unavailable" | null) => void;
+  /** 设备在线状态（AppShell 监听 online/offline 事件调用）。 */
+  setOffline: (v: boolean) => void;
   /** 载入项目（T16 多项目切换）：清 saveTimer + 写偏好 + 重置播放器 + 立即落库。 */
   loadProject: (project: CompilationProject) => void;
 }
 
-const initialPlayer: PlayerState = { isPlaying: false, currentTime: 0, duration: 0, loading: false, volume: 0.8, error: null };
+const initialPlayer: PlayerState = { isPlaying: false, currentTime: 0, duration: 0, loading: false, volume: 0.8, error: null, denied: {} };
 
 // —— 自动保存管线 ——
 let booted = false; // boot 完成前不写库，避免初始 demo 覆盖已有项目
@@ -278,6 +286,7 @@ export const useCompilationStore = create<CompilationStore>()(
       face: "front",
       mobileSheetOpen: false,
       player: initialPlayer,
+      offline: typeof navigator !== "undefined" ? !navigator.onLine : false, // SSR 短路
 
       setProjectField: (key, value) =>
         set((s) => ({ project: bump({ ...s.project, [key]: value }) })),
@@ -323,6 +332,17 @@ export const useCompilationStore = create<CompilationStore>()(
       setActiveTrack: (activeTrackId) => set((s) => ({ project: bump({ ...s.project, activeTrackId }) })),
       setIsPlaying: (isPlaying) => set((s) => ({ player: { ...s.player, isPlaying } })),
       setProgress: (partial) => set((s) => ({ player: { ...s.player, ...partial } })),
+      setDenied: (id, kind) =>
+        set((s) => {
+          if (kind === null) {
+            if (!(id in s.player.denied)) return s; // 无标记可清：返回原 state，zustand v5 跳过更新
+            const denied = { ...s.player.denied };
+            delete denied[id];
+            return { player: { ...s.player, denied } };
+          }
+          return { player: { ...s.player, denied: { ...s.player.denied, [id]: kind } } };
+        }),
+      setOffline: (offline) => set({ offline }),
 
       /**
        * 载入项目（T16 多项目切换）。四件事：
