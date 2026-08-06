@@ -1,5 +1,5 @@
 import type { MusicProvider, PlayableSource, TrackMetadata, TrackSearchResult } from "./types";
-import type { Track } from "@/types/compilation";
+import type { CompilationTrack } from "@/types/compilation";
 import { synthesizeDemoWav } from "./synthesize";
 
 class DemoMusicProvider implements MusicProvider {
@@ -8,7 +8,7 @@ class DemoMusicProvider implements MusicProvider {
   async search(_query: string): Promise<TrackSearchResult[]> { return []; }
   async resolve(_input: string): Promise<TrackMetadata | null> { return null; }
 
-  async getPlayableSource(track: Track): Promise<PlayableSource | null> {
+  async getPlayableSource(track: CompilationTrack): Promise<PlayableSource | null> {
     if (!this.cache.has(track.id)) {
       const seed = (track.title.length + track.id.length) % 13;
       this.cache.set(track.id, await synthesizeDemoWav(seed));

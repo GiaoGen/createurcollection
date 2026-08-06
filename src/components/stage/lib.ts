@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FilterId, SpineStyle } from "@/types/compilation";
-import { bakeFilteredUrl } from "@/lib/image/art-filters";
+import { bakeFilteredUrl, filterSeed } from "@/lib/image/art-filters";
+import { useObjectUrl } from "@/lib/image/blobs";
 
 /* ------------------------------------------------------------------ *
  * WebGL capability + tiny math helpers
@@ -223,14 +224,16 @@ function makeTrayTexture(): THREE.CanvasTexture {
  * ------------------------------------------------------------------ */
 
 /**
- * Front/back/disc artwork texture. The source imageUrl is baked through the
- * art-filter pipeline (bakeFilteredUrl) and composited by the existing
- * cover/disc painters — so the filter is baked into the artwork only, while
- * the square crop, vignette, disc vinyl + label and flipX mirror keep working.
+ * Front/back/disc artwork texture. The source `imageId` is resolved to an
+ * Object URL (useObjectUrl, held across swaps so the previous frame never
+ * reverts to grey) and baked through the art-filter pipeline (bakeFilteredUrl)
+ * and composited by the existing cover/disc painters — so the filter is baked
+ * into the artwork only, while the square crop, vignette, disc vinyl + label
+ * and flipX mirror keep working.
  *
  * Debounce-hold UX: filter clicks are debounced for 150ms (so heavy filters —
  * oilpainting/vhs/glitch/collage — stay responsive when clicking through
- * quickly). While a new (url, filter) is pending, the PREVIOUS baked frame
+ * quickly). While a new (imageId, filter) is pending, the PREVIOUS baked frame
  * stays on the mesh instead of reverting to the grey placeholder; the freshly
  * painted texture replaces it once the bake lands and the old one is disposed
  * (supersede). The "NO COVER" placeholder is shown only when there is
@@ -238,11 +241,18 @@ function makeTrayTexture(): THREE.CanvasTexture {
  * failure rather than nuking a good frame.
  */
 export function useArtworkTexture(
-  url: string | null,
+  imageId: string | null,
   filter: FilterId,
   mode: "cover" | "disc" = "cover",
   flipX = false
 ): THREE.Texture {
+  // Held Object URL: keeps the previous image while the new one loads from
+  // IndexedDB, so switching faces/crops never flashes the grey placeholder.
+  const url = useObjectUrl(imageId);
+  // Stable seed from the persistent imageId (NOT the volatile Object URL),
+  // keeping heavy random filters consistent across preview/texture/export.
+  const seed = imageId ? filterSeed(imageId, filter) : 0;
+
   // The texture currently on the mesh. Starts as the placeholder; a completed
   // bake swaps in a freshly painted one, so the debounce window keeps showing
   // the previous frame (no grey flash on first load or on filter clicks).
@@ -260,20 +270,20 @@ export function useArtworkTexture(
   // Dispose the texture a newer bake supersedes (and the live one on unmount).
   useEffect(() => () => tex.dispose(), [tex]);
 
-  // Guards late async bakes from a superseded (url, filter) overwriting a
+  // Guards late async bakes from a superseded (imageId, filter) overwriting a
   // newer frame — a bake already in flight can't be cancelled, only ignored.
   const requestKey = useRef("");
 
   useEffect(() => {
-    const key = `${url ?? ""}|${filter}|${mode}|${flipX}`;
+    const key = `${imageId ?? ""}|${filter}|${mode}|${flipX}`;
     requestKey.current = key;
     const stale = () => requestKey.current !== key;
 
     // Debounced bake — the previous texture stays mounted for these 150ms.
-    // A null url has nothing to bake, so the placeholder swap fires almost
+    // A null imageId has nothing to bake, so the placeholder swap fires almost
     // immediately (0ms) instead of on the debounce clock.
     const timer = window.setTimeout(() => {
-      if (!url) {
+      if (!imageId || !url) {
         // No image at all → "NO COVER" (fresh state has no prior frame).
         const canvas = document.createElement("canvas");
         canvas.width = canvas.height = TEX;
@@ -312,7 +322,7 @@ export function useArtworkTexture(
         // and draw the source straight into the texture canvas (lossless).
         paint(url);
       } else {
-        bakeFilteredUrl(url, filter, TEX)
+        bakeFilteredUrl(url, filter, TEX, seed)
           .then(paint)
           .catch(() => {
             /* keep the previous frame (placeholder on first load) */
@@ -324,17 +334,18 @@ export function useArtworkTexture(
       window.clearTimeout(timer);
       requestKey.current = ""; // any in-flight bake for this request is stale
     };
-  }, [url, filter, mode, flipX]);
+  }, [imageId, url, filter, mode, flipX, seed]);
 
   return tex;
 }
 
 /** Spine: built from the front-cover average colour + vertical title. */
 export function useSpineTexture(
-  url: string | null,
+  imageId: string | null,
   title: string,
   spineStyle: SpineStyle
 ): THREE.Texture {
+  const url = useObjectUrl(imageId);
   const tex = useMemo(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 128;

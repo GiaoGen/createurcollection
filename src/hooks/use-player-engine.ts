@@ -34,9 +34,11 @@ async function play(id: string): Promise<void> {
   const { project, setActiveTrack, setIsPlaying, setProgress } = useCompilationStore.getState();
   const track = project.tracks.find((t) => t.id === id);
   if (!track) return;
+  setProgress({ loading: true, error: null });
   const source = await getMusicProvider().getPlayableSource(track); // 走 Provider，demo 首次合成并缓存
   if (!source) {
-    if (token === playToken) setIsPlaying(false); // 无源不播，不做假播放；已被更新的 play 取代则不写
+    // 无源不播，不做假播放；已被更新的 play 取代则不写
+    if (token === playToken) setProgress({ loading: false, error: "受限或不可播放" });
     return;
   }
   const a = getAudio();
@@ -45,12 +47,13 @@ async function play(id: string): Promise<void> {
     a.load();
   }
   setActiveTrack(track.id);
-  setProgress({ duration: source.duration ?? track.duration });
+  // durationMs 为毫秒（CompilationTrack），源/引擎使用秒。
+  setProgress({ duration: source.duration ?? (track.durationMs ?? 0) / 1000, loading: false, error: null });
   try {
     await a.play();
   } catch {
     // 只有仍是最近一次播放才写 isPlaying，避免被换源 load() 中止的旧 play 覆盖新播放状态
-    if (token === playToken) setIsPlaying(false);
+    if (token === playToken) setProgress({ loading: false, error: "播放失败" });
     return;
   }
   if (token === playToken) setIsPlaying(true); // play 事件也会置 true，幂等

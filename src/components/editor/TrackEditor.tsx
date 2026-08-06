@@ -1,6 +1,7 @@
 "use client";
 import { Plus, GripVertical, Trash2 } from "lucide-react";
 import { useCompilationStore } from "@/store/use-compilation-store";
+import type { CompilationTrack } from "@/types/compilation";
 import { createId, formatTime } from "@/lib/storage";
 import { PlayingIndicator } from "@/components/player/PlayingIndicator";
 
@@ -12,7 +13,13 @@ export function TrackEditor() {
   const { updateTrack, removeTrack, addTrack, setActiveTrack, reorderTracks } = useCompilationStore.getState();
 
   const add = () => {
-    const t = { id: createId("trk"), title: "未命名曲目", artist: "—", duration: 0, src: "" };
+    const t: CompilationTrack = {
+      id: createId("trk"),
+      provider: "demo",
+      providerTrackId: null,
+      title: "未命名曲目",
+      artist: "—",
+    };
     addTrack(t);
   };
 
@@ -66,7 +73,7 @@ export function TrackEditor() {
                 className="w-full bg-transparent text-xs text-[var(--muted)] outline-none"
               />
             </div>
-            <span className="font-mono-num text-xs text-[var(--muted)]">{formatTime(t.duration)}</span>
+            <span className="font-mono-num text-xs text-[var(--muted)]">{formatTime((t.durationMs ?? 0) / 1000)}</span>
             <button
               type="button"
               onClick={(e) => {

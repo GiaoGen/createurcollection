@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ART_FILTERS, bakeFilteredUrl } from "@/lib/image/art-filters";
+import { ART_FILTERS, bakeFilteredUrl, filterSeed } from "@/lib/image/art-filters";
+import { useObjectUrl } from "@/lib/image/blobs";
 import { useCompilationStore } from "@/store/use-compilation-store";
 
-/** Bake cache keyed by `face:filter:imageUrl` — survives component remounts. */
+/** Bake cache keyed by `face:filter:imageId` — survives component remounts.
+ *  key 用稳定的 imageId（非 Object URL——URL 每次加载都重建），跨会话一致。 */
 const thumbCache = new Map<string, string>();
 const THUMB_MAX_CACHE = 240;
 
@@ -14,7 +16,10 @@ export function FilterSelector() {
     s.project[face === "front" ? "frontCover" : face === "back" ? "backCover" : "discArtwork"]
   );
   const setArtwork = useCompilationStore((s) => s.setArtwork);
-  const imageUrl = art.imageUrl;
+  // hold=false：切面时先清空再加载，避免把旧面的 URL 烘焙进新 imageId 的缓存 key。
+  const imageUrl = useObjectUrl(art.imageId, false);
+  // 缓存/seed 一律用稳定 imageId；const 局部变量以便 effect 闭包内类型收窄为 string。
+  const imageId = art.imageId;
   const active = art.filter;
   // Store the bake results alongside the imageUrl they were derived from,
   // so stale thumbs (from a previous face/crop) are never shown while a
@@ -24,21 +29,21 @@ export function FilterSelector() {
   const shown = thumbs.key === thumbKey ? thumbs.map : {};
 
   useEffect(() => {
-    if (!imageUrl) return;
+    if (!imageUrl || !imageId) return;
     let cancelled = false;
 
     const build = async () => {
       const out: Record<string, string> = {};
       await Promise.all(
         ART_FILTERS.map(async (f) => {
-          const key = `${face}:${f.id}:${imageUrl}`;
+          const key = `${face}:${f.id}:${imageId}`;
           const cached = thumbCache.get(key);
           if (cached) {
             out[f.id] = cached;
             return;
           }
           try {
-            const url = await bakeFilteredUrl(imageUrl, f.id, 96);
+            const url = await bakeFilteredUrl(imageUrl, f.id, 96, filterSeed(imageId, f.id));
             if (cancelled) return;
             if (thumbCache.size > THUMB_MAX_CACHE) thumbCache.clear();
             thumbCache.set(key, url);
@@ -55,7 +60,7 @@ export function FilterSelector() {
     return () => {
       cancelled = true;
     };
-  }, [face, imageUrl]);
+  }, [face, imageUrl, imageId]);
 
   return (
     <div className="flex flex-col gap-3">

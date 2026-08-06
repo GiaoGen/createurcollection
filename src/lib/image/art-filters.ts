@@ -62,13 +62,13 @@ function mulberry32(seed: number): () => number {
 
 /**
  * Resolution-independent, face-agnostic seed for an artwork+filter pair.
- * Derived from the source URL (which changes when a new image/crop is
- * applied) so heavy random filters re-roll for new artwork while staying
- * consistent between the 96px thumbnails, the 1024px texture and the
- * 1600px export bake of the same URL.
+ * Derived from the persistent `imageId` — NOT the Object URL (Object URLs are
+ * recreated on every load; hashing them would break the consistency of heavy
+ * random filters between the 96px thumbnails, the 1024px texture and the
+ * 1600px export bake of the same image). Consistent across reloads.
  */
-export function filterSeed(imageUrl: string, filter: FilterId): number {
-  return hashString(`${imageUrl}::${filter}`);
+export function filterSeed(imageId: string, filter: FilterId): number {
+  return hashString(`${imageId}::${filter}`);
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -168,7 +168,7 @@ export async function bakeFilteredUrl(
   src: string,
   filter: FilterId,
   maxEdge = 1600,
-  seed?: number
+  seed: number
 ): Promise<string> {
   const img = await loadImage(src);
   const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
@@ -179,7 +179,7 @@ export async function bakeFilteredUrl(
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.drawImage(img, 0, 0, w, h);
-  applyArtFilter(ctx, filter, seed ?? filterSeed(src, filter));
+  applyArtFilter(ctx, filter, seed);
   return canvas.toDataURL("image/png");
 }
 

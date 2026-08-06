@@ -3,6 +3,7 @@
 import { useCompilationStore } from "@/store/use-compilation-store";
 import type { ArtworkState } from "@/types/compilation";
 import { INLINE_FILTER_CSS } from "./lib";
+import { useObjectUrl } from "@/lib/image/blobs";
 import type { CSSProperties } from "react";
 
 const FACE_ROT: Record<string, number> = { front: 0, back: 180, disc: 90 };
@@ -18,26 +19,30 @@ export function StageFallback() {
   const back = useCompilationStore((s) => s.project.backCover);
   const disc = useCompilationStore((s) => s.project.discArtwork);
   const title = useCompilationStore((s) => s.project.title);
+  // imageId → Object URL（IndexedDB 存储的 Blob）；每个面独立持有。
+  const frontUrl = useObjectUrl(front.imageId);
+  const backUrl = useObjectUrl(back.imageId);
+  const discUrl = useObjectUrl(disc.imageId);
 
   const rotY = FACE_ROT[face];
 
-  const faceStyle = (art: ArtworkState): CSSProperties => ({
+  const faceStyle = (art: ArtworkState, url: string | null): CSSProperties => ({
     position: "absolute",
     top: 0,
     left: 0,
     width: CASE_W,
     height: CASE_H,
-    backgroundImage: art.imageUrl ? `url(${art.imageUrl})` : undefined,
+    backgroundImage: url ? `url(${url})` : undefined,
     backgroundSize: "cover",
     backgroundPosition: "center",
-    filter: art.imageUrl ? INLINE_FILTER_CSS[art.filter] : undefined,
-    backgroundColor: art.imageUrl ? undefined : "#3a3a3a",
+    filter: url ? INLINE_FILTER_CSS[art.filter] : undefined,
+    backgroundColor: url ? undefined : "#3a3a3a",
     border: "1px solid rgba(0,0,0,0.2)",
     backfaceVisibility: "hidden",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: art.imageUrl ? undefined : "rgba(255,255,255,0.55)",
+    color: url ? undefined : "rgba(255,255,255,0.55)",
     fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
     fontSize: 12,
     letterSpacing: "0.3em",
@@ -60,17 +65,17 @@ export function StageFallback() {
           }}
         >
           {/* front */}
-          <div style={{ ...faceStyle(front), transform: `translateZ(${CASE_T / 2}px)` }}>
-            {!front.imageUrl && <span>NO COVER</span>}
+          <div style={{ ...faceStyle(front, frontUrl), transform: `translateZ(${CASE_T / 2}px)` }}>
+            {!frontUrl && <span>NO COVER</span>}
           </div>
           {/* back */}
           <div
             style={{
-              ...faceStyle(back),
+              ...faceStyle(back, backUrl),
               transform: `rotateY(180deg) translateZ(${CASE_T / 2}px)`,
             }}
           >
-            {!back.imageUrl && <span>NO COVER</span>}
+            {!backUrl && <span>NO COVER</span>}
           </div>
           {/* spine */}
           <div
@@ -109,10 +114,10 @@ export function StageFallback() {
               width: 120,
               height: 120,
               borderRadius: "50%",
-              backgroundImage: disc.imageUrl ? `url(${disc.imageUrl})` : undefined,
+              backgroundImage: discUrl ? `url(${discUrl})` : undefined,
               backgroundSize: "cover",
               backgroundPosition: "center",
-              filter: disc.imageUrl ? INLINE_FILTER_CSS[disc.filter] : undefined,
+              filter: discUrl ? INLINE_FILTER_CSS[disc.filter] : undefined,
               backgroundColor: "#0a0a0a",
               transform: `translateZ(${CASE_T / 2 + 1}px)`,
               transition: "left 0.7s cubic-bezier(0.22, 1, 0.36, 1)",

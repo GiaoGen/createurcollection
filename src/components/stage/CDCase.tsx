@@ -56,15 +56,15 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
   const activeTrackId = useCompilationStore((s) => s.project.activeTrackId);
   const setFace = useCompilationStore((s) => s.setFace);
 
-  const frontTex = useArtworkTexture(project.frontCover.imageUrl, project.frontCover.filter, "cover");
+  const frontTex = useArtworkTexture(project.frontCover.imageId, project.frontCover.filter, "cover");
   const backTex = useArtworkTexture(
-    project.backCover.imageUrl,
+    project.backCover.imageId,
     project.backCover.filter,
     "cover",
     true // back cover is seen from the back of the case → un-mirror it
   );
-  const discTex = useArtworkTexture(project.discArtwork.imageUrl, project.discArtwork.filter, "disc");
-  const spineTex = useSpineTexture(project.frontCover.imageUrl, project.title, project.spineStyle);
+  const discTex = useArtworkTexture(project.discArtwork.imageId, project.discArtwork.filter, "disc");
+  const spineTex = useSpineTexture(project.frontCover.imageId, project.title, project.spineStyle);
   const trayTex = useTrayTexture();
 
   const targetY = useMemo(() => {

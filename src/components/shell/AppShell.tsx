@@ -31,6 +31,8 @@ function useIsDesktop(): boolean {
 export function AppShell() {
   const theme = useCompilationStore((s) => s.project.theme);
   const projectTitle = useCompilationStore((s) => s.project.title);
+  // IndexedDB 引导完成前渲染占位，避免“demo 项目”闪现后切到真实项目（视觉跳变）。
+  const hydrated = useCompilationStore((s) => s.hydrated);
   // 移动端 Bottom Sheet 打开时 Stage 轻微上移缩小；桌面 Sheet 为 md:hidden 不触发。
   const mobileSheetOpen = useCompilationStore((s) => s.mobileSheetOpen);
   const setMobileSheetOpen = useCompilationStore((s) => s.setMobileSheetOpen);
@@ -94,6 +96,10 @@ export function AppShell() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [setMobileSheetOpen]);
+
+  if (!hydrated) {
+    return <div className="h-full w-full bg-[var(--background)]" aria-hidden />;
+  }
 
   return (
     <div className="flex h-full w-full overflow-hidden">

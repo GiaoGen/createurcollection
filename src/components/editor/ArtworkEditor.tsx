@@ -4,31 +4,45 @@ import { AnimatePresence, motion } from "motion/react";
 import Cropper from "react-easy-crop";
 import type { Area, Point } from "react-easy-crop";
 import { useCompilationStore } from "@/store/use-compilation-store";
-import { fileToDataUrl, resizeImageToMax } from "@/lib/image/resize";
+import { compressImage, dataUrlToBlob, storeImage, revokeObjectUrl, useObjectUrl } from "@/lib/image/blobs";
 import { cropImage } from "@/lib/image/crop";
 
 export function ArtworkEditor() {
   const face = useCompilationStore((s) => s.face);
   const art = useCompilationStore((s) => s.project[face === "front" ? "frontCover" : face === "back" ? "backCover" : "discArtwork"]);
   const setArtwork = useCompilationStore((s) => s.setArtwork);
-  const [src, setSrc] = useState<string | null>(art.imageUrl);
+  // 已提交图的 Object URL（hold=false：切面/裁剪确认时先清空再加载，避免显示旧面的图）。
+  const committedUrl = useObjectUrl(art.imageId, false);
+  // 尚未提交的本地上传预览（压缩后 Object URL）；applyCrop 提交后仍保留，供继续再裁。
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const pendingUrlRef = useRef<string | null>(null);
   // Cropper 的实时状态：crop（px Point）与 zoom 只存本地，避免与 store 中已提交的
   // croppedAreaPixels（px，相对媒体包围盒）混用导致显示漂移。zoom/rotation 仍持久化到 store。
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(art.zoom);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // 切换面（正面/背面/盘面）时同步预览源；src 保持未裁剪图，imageUrl 仅在应用裁剪后更新
+  // 裁剪源：优先本地未提交预览；否则回落到当前面的已提交图。
+  const src = pendingUrl ?? committedUrl;
+
+  // 切换面（正面/背面/盘面）时：丢弃旧面的未提交预览，重置 crop/zoom；
+  // 已提交图由 useObjectUrl(art.imageId) 自动切换到新面的图。
   const prevFace = useRef(face);
   useEffect(() => {
     if (prevFace.current !== face) {
       prevFace.current = face;
-      setSrc(art.imageUrl);
-      // 新的编辑会话：crop 从原点开始（已应用并持久化的 imageUrl 不受影响），zoom 采用该面的已存值
+      if (pendingUrlRef.current) {
+        revokeObjectUrl(pendingUrlRef.current);
+        pendingUrlRef.current = null;
+        setPendingUrl(null);
+      }
       setCrop({ x: 0, y: 0 });
       setZoom(art.zoom);
     }
-  }, [face, art.imageUrl, art.zoom]);
+  }, [face, art.zoom]);
+
+  // 卸载时释放本地预览 URL（已提交图由 useObjectUrl 自行释放）。
+  useEffect(() => () => { if (pendingUrlRef.current) revokeObjectUrl(pendingUrlRef.current); }, []);
 
   // 追踪当前面，供异步操作（上传/裁剪）完成后校验：期间切换了面则丢弃结果，避免写入错误的面
   const currentFaceRef = useRef(face);
@@ -37,14 +51,20 @@ export function ArtworkEditor() {
   const onFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]; if (!f) return;
     const targetFace = face;
-    const dataUrl = await fileToDataUrl(f);
-    const resized = await resizeImageToMax(dataUrl);
-    if (currentFaceRef.current !== targetFace) return; // 上传期间切换了面：丢弃本次结果
-    setSrc(resized);              // 预览源（未裁剪）
-    setCrop({ x: 0, y: 0 });
-    setZoom(1);
-    // 新图重置裁剪参数；crop 为占位（尚未提交，onCropComplete 会写入 croppedAreaPixels），裁剪确认后写 imageUrl
-    setArtwork(targetFace, { sourceName: f.name, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
+    try {
+      const { blob } = await compressImage(f); // 校验类型 + 压缩（最长边 ≤2048）
+      if (currentFaceRef.current !== targetFace) return; // 上传期间切换了面：丢弃本次结果
+      if (pendingUrlRef.current) revokeObjectUrl(pendingUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      pendingUrlRef.current = url;
+      setPendingUrl(url);      // 预览源（未裁剪）
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+      // 新图重置裁剪参数；crop 为占位（尚未提交，onCropComplete 会写入 croppedAreaPixels），裁剪确认后写 imageId
+      setArtwork(targetFace, { sourceName: f.name, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
+    } catch {
+      // 非图片/解码失败：不进入预览，保持现状（不抛错打断编辑）。
+    }
   }, [face, setArtwork]);
 
   const onCropComplete = useCallback((_croppedArea: Area, croppedAreaPixels: Area) => {
@@ -56,16 +76,22 @@ export function ArtworkEditor() {
     const targetFace = face;
     const out = await cropImage(src, art.crop, art.rotation); // art.crop 为 croppedAreaPixels（px）
     if (currentFaceRef.current !== targetFace) return; // 处理期间切换了面：不写入错误的面
-    const old = art.imageUrl;
-    setArtwork(targetFace, { imageUrl: out });
-    if (old && old.startsWith("blob:")) URL.revokeObjectURL(old); // 释放旧 URL
-  }, [src, art, face, setArtwork]);
+    const blob = dataUrlToBlob(out);
+    const stored = await storeImage(blob);
+    if (currentFaceRef.current !== targetFace) return; // 落库期间又切面：丢弃
+    setArtwork(targetFace, { imageId: stored.id });
+    // 保留 pendingUrl（未裁剪预览），cropper 继续显示原始图供再裁
+  }, [src, art.crop, art.rotation, face, setArtwork]);
 
   const reset = useCallback(() => {
-    setSrc(null);
+    if (pendingUrlRef.current) {
+      revokeObjectUrl(pendingUrlRef.current);
+      pendingUrlRef.current = null;
+      setPendingUrl(null);
+    }
     setCrop({ x: 0, y: 0 });
     setZoom(1);
-    setArtwork(face, { sourceName: null, imageUrl: null, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
+    setArtwork(face, { sourceName: null, imageId: null, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
   }, [face, setArtwork]);
 
   return (

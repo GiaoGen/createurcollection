@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import { bakeFilteredUrl } from "@/lib/image/art-filters";
+import { bakeFilteredUrl, filterSeed } from "@/lib/image/art-filters";
+import { useObjectUrl } from "@/lib/image/blobs";
 import { trackCoverBake } from "@/lib/export-bake";
 import { useCompilationStore } from "@/store/use-compilation-store";
 import type { SpineStyle } from "@/types/compilation";
@@ -50,12 +51,14 @@ export function ExportCard() {
 
   // Baked cover: pre-bake the front-cover filter so the captured PNG carries it.
   const [coverSrc, setCoverSrc] = useState<string | null>(null);
-  const frontImageUrl = project.frontCover.imageUrl;
+  // hold=false：imageId 变化先清空再加载，避免把旧图的 URL 与新 imageId 的 seed 配错烘焙。
+  const frontImageUrl = useObjectUrl(project.frontCover.imageId, false);
   const frontFilter = project.frontCover.filter;
+  const frontImageId = project.frontCover.imageId;
 
   useEffect(() => {
     let cancelled = false;
-    if (!frontImageUrl) {
+    if (!frontImageUrl || !frontImageId) {
       // No image → placeholder. Register "no bake" so an export clicked in
       // this state does not wait on a stale bake. Defer the state write onto
       // a microtask so the effect body never calls setState synchronously
@@ -72,8 +75,8 @@ export function ExportCard() {
     // capturing — otherwise a click right after a filter/image change would
     // grab the previous bake's result (or the "NO COVER" placeholder). Each
     // re-run overwrites the previous registration, so the handler only ever
-    // waits on the newest bake.
-    const bake = bakeFilteredUrl(frontImageUrl, frontFilter, BAKE_MAX_EDGE)
+    // waits on the newest bake. Seed 由稳定 imageId 派生（非 Object URL）。
+    const bake = bakeFilteredUrl(frontImageUrl, frontFilter, BAKE_MAX_EDGE, filterSeed(frontImageId, frontFilter))
       .then((url) => {
         if (!cancelled) setCoverSrc(url);
       })
@@ -84,7 +87,7 @@ export function ExportCard() {
     return () => {
       cancelled = true;
     };
-  }, [frontImageUrl, frontFilter]);
+  }, [frontImageUrl, frontFilter, frontImageId]);
 
   const title = project.title.trim();
   const metaLine = [
