@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { bakeFilteredUrl } from "@/lib/image/art-filters";
+import { trackCoverBake } from "@/lib/export-bake";
 import { useCompilationStore } from "@/store/use-compilation-store";
 import type { SpineStyle } from "@/types/compilation";
 
@@ -55,8 +56,11 @@ export function ExportCard() {
   useEffect(() => {
     let cancelled = false;
     if (!frontImageUrl) {
-      // No image → reset to placeholder. Defer onto a microtask so the effect
-      // body never calls setState synchronously (react-hooks/set-state-in-effect).
+      // No image → placeholder. Register "no bake" so an export clicked in
+      // this state does not wait on a stale bake. Defer the state write onto
+      // a microtask so the effect body never calls setState synchronously
+      // (react-hooks/set-state-in-effect).
+      trackCoverBake(null);
       Promise.resolve().then(() => {
         if (!cancelled) setCoverSrc(null);
       });
@@ -64,13 +68,19 @@ export function ExportCard() {
         cancelled = true;
       };
     }
-    bakeFilteredUrl(frontImageUrl, frontFilter, BAKE_MAX_EDGE)
+    // Register the in-flight bake so the export handler awaits it before
+    // capturing — otherwise a click right after a filter/image change would
+    // grab the previous bake's result (or the "NO COVER" placeholder). Each
+    // re-run overwrites the previous registration, so the handler only ever
+    // waits on the newest bake.
+    const bake = bakeFilteredUrl(frontImageUrl, frontFilter, BAKE_MAX_EDGE)
       .then((url) => {
         if (!cancelled) setCoverSrc(url);
       })
       .catch(() => {
         if (!cancelled) setCoverSrc(null); // bake failed → placeholder, no crash
       });
+    trackCoverBake(bake);
     return () => {
       cancelled = true;
     };
@@ -85,10 +95,21 @@ export function ExportCard() {
     .join(" · ");
 
   const tracks = project.tracks;
-  const catNo = project.year.trim() ? `CYC-${project.year.trim().slice(-4)}` : "CYC-LTD";
-  const cols = tracks.length > 6 ? 2 : 1;
-  const per = cols === 1 ? tracks.length : Math.ceil(tracks.length / 2);
-  const columns = Array.from({ length: cols }, (_, i) => tracks.slice(i * per, (i + 1) * per));
+  // Catalog number: keep only digits, pad to 4, take the last 4 — so a
+  // non-4-digit year (e.g. "96" or "020s") yields a sane "CYC-0096", and a
+  // year with no digits at all falls back to the limited edition mark.
+  const yearDigits = project.year.replace(/\D/g, "");
+  const catNo = yearDigits ? `CYC-${yearDigits.padStart(4, "0").slice(-4)}` : "CYC-LTD";
+  // Deliberate cap on the backlist: the two-column area is a fixed height, so
+  // a very long playlist would otherwise be silently clipped in the PNG. 24
+  // (12 rows/column) fits comfortably inside the ~570px budget; anything more
+  // gets an explicit "+N MORE" marker in the footer instead of a silent cut.
+  const MAX_DISPLAY_TRACKS = 24;
+  const shownTracks = tracks.slice(0, MAX_DISPLAY_TRACKS);
+  const hiddenCount = tracks.length - shownTracks.length;
+  const cols = shownTracks.length > 6 ? 2 : 1;
+  const per = cols === 1 ? shownTracks.length : Math.ceil(shownTracks.length / 2);
+  const columns = Array.from({ length: cols }, (_, i) => shownTracks.slice(i * per, (i + 1) * per));
 
   return (
     <div
@@ -293,8 +314,19 @@ export function ExportCard() {
           <span style={{ fontFamily: E.mono, fontSize: 12, letterSpacing: "0.14em", color: E.muted }}>
             {catNo}
           </span>
-          <span style={{ fontFamily: E.mono, fontSize: 12, letterSpacing: "0.14em", color: E.muted }}>
-            {tracks.length === 0 ? "EMPTY" : `${String(tracks.length).padStart(2, "0")} TRACKS`}
+          <span
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 12,
+              fontFamily: E.mono,
+              fontSize: 12,
+              letterSpacing: "0.14em",
+              color: E.muted,
+            }}
+          >
+            {hiddenCount > 0 ? <span>… +{hiddenCount} MORE</span> : null}
+            <span>{tracks.length === 0 ? "EMPTY" : `${String(tracks.length).padStart(2, "0")} TRACKS`}</span>
           </span>
         </div>
       </div>
