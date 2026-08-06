@@ -68,7 +68,10 @@ function getAudio(): HTMLAudioElement {
               duration: source.duration ?? (track.durationMs ?? 0) / 1000,
               error: null,
             });
-            void el.play();
+            // 重试 URL 仍不可播时 play() 会 reject（NotSupportedError）；不 catch 会产生
+            // unhandled promise rejection → Console Error。真实失败已由 audio error 事件
+            // 走「播放失败（已重试）」分支，这里仅吞掉 reject，不重复写错误。
+            void el.play().catch(() => {});
           } else {
             s.setProgress({ loading: false, error: "播放失败（已重试）" });
           }
@@ -119,12 +122,10 @@ async function play(id: string): Promise<void> {
   // 必须在此拦截，否则 post-await 仍会重设 src 并播放旧音频、把旧 track id 写回 store（跨项目数据污染）。
   if (token !== playToken) return;
   if (!source) {
-    // 无源不播，不做假播放；已被更新的 play 取代则不写
-    if (token === playToken) {
-      getAudio().pause();
-      setActiveTrack(track.id);
-      setProgress({ loading: false, error: "不可播放" });
-    }
+    // 无源不播，不做假播放（顶部 token 守卫已排除被更新的 play 取代的情况）
+    getAudio().pause();
+    setActiveTrack(track.id);
+    setProgress({ loading: false, error: "不可播放" });
     return;
   }
   if (source.kind !== "audio") {

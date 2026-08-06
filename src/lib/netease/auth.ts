@@ -92,12 +92,19 @@ async function checkQrStatus(key: string, signal?: AbortSignal): Promise<QrCheck
   });
   const code = body.code ?? body.data?.code;
   if (code === 800) return { state: "expired" };
+  if (code === 801) return { state: "waiting" };
   if (code === 802) return { state: "scanned" };
   if (code === 803) {
     const cookie = typeof body.cookie === "string" && body.cookie ? body.cookie : body.data?.cookie;
     if (!cookie) throw new NeteaseError("api", "未返回登录 Cookie");
     return { state: "confirmed", cookie };
   }
+  // 其它数值 code（限流 429 / 业务错误如 -460 等）：直接上抛，让 pollQrCheck 抛出到
+  // 登录 UI 内联提示 + 重试，而不是「等待扫码…」死循环每 2s 轮询。
+  if (typeof code === "number") {
+    throw new NeteaseError("api", `二维码状态查询失败（${code}）`);
+  }
+  // 无 code（部分实例 /login/qr/check 返回无 code 字段）：维持等待。
   return { state: "waiting" };
 }
 
@@ -192,7 +199,11 @@ export async function saveSession(
     // 隐私模式等写入失败，忽略；仍保有内存态。
   }
   if (remember) {
-    await saveNeteaseSession(session);
+    try {
+      await saveNeteaseSession(session);
+    } catch {
+      // IndexedDB 写入失败（配额/隐私模式）不阻塞登录：内存 + sessionStorage 仍保有会话。
+    }
   }
 }
 

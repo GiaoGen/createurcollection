@@ -200,8 +200,10 @@ export function NeteasePicker() {
       });
     }
     setSelected(new Map());
+    setSourcePlaylistId(undefined);
+    setActiveTab("liked");
     setPickerOpen(false);
-  }, [selected, addTrack, activeTab, sourcePlaylistId, setSelected, setPickerOpen]);
+  }, [selected, addTrack, activeTab, sourcePlaylistId, setSelected, setSourcePlaylistId, setActiveTab, setPickerOpen]);
 
   const handleLogout = useCallback(async () => {
     abortRef.current?.abort();
