@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore, useState } from "react";
 import { motion } from "motion/react";
 import { ProjectRail } from "./ProjectRail";
 import { CDStage } from "@/components/stage/CDStage";
@@ -12,11 +12,30 @@ import { exportCardPng } from "@/lib/export-image";
 import { getLatestCoverBake } from "@/lib/export-bake";
 import { useCompilationStore } from "@/store/use-compilation-store";
 
+/** 桌面断点（≥768px，与 Tailwind `md` 一致）。 */
+const DESKTOP_MQ = "(min-width: 768px)";
+
+/** 订阅 matchMedia 的 isDesktop；SSR 首帧取 false，客户端挂载后立即对齐真实断点。 */
+function useIsDesktop(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const mq = window.matchMedia(DESKTOP_MQ);
+      mq.addEventListener("change", cb);
+      return () => mq.removeEventListener("change", cb);
+    },
+    () => window.matchMedia(DESKTOP_MQ).matches,
+    () => false
+  );
+}
+
 export function AppShell() {
   const theme = useCompilationStore((s) => s.project.theme);
   const projectTitle = useCompilationStore((s) => s.project.title);
   // 移动端 Bottom Sheet 打开时 Stage 轻微上移缩小；桌面 Sheet 为 md:hidden 不触发。
   const mobileSheetOpen = useCompilationStore((s) => s.mobileSheetOpen);
+  const setMobileSheetOpen = useCompilationStore((s) => s.setMobileSheetOpen);
+  // 桌面断点：Stage 缩小生效条件再加 !isDesktop，保证桌面永不缩小。
+  const isDesktop = useIsDesktop();
   // 导出失败时显示的轻量提示（成功不提示）。
   const [exportError, setExportError] = useState<string | null>(null);
   // 同步 <html data-theme>：挂载时写一次，之后随 project.theme 变化。
@@ -61,6 +80,18 @@ export function AppShell() {
     };
   }, [projectTitle]);
 
+  // 跨断点自动收口：手机打开 Sheet 后旋转/拉伸到 ≥768px，Sheet 与 MobileHeader 编辑
+  // 按钮 md:hidden 消失但 open 仍为 true，状态残留且无 UI 可重置。这里在进入桌面断点
+  // 时清掉 open 标志（setState 放 matchMedia 回调里，避开 set-state-in-effect）。
+  useEffect(() => {
+    const mq = window.matchMedia(DESKTOP_MQ);
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setMobileSheetOpen(false);
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [setMobileSheetOpen]);
+
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* 桌面：左 rail */}
@@ -72,7 +103,7 @@ export function AppShell() {
         <div className="flex flex-1 min-h-0">
           <motion.main
             className="flex-1 min-h-0 relative"
-            animate={{ scale: mobileSheetOpen ? 0.96 : 1, y: mobileSheetOpen ? -8 : 0 }}
+            animate={{ scale: mobileSheetOpen && !isDesktop ? 0.96 : 1, y: mobileSheetOpen && !isDesktop ? -8 : 0 }}
             transition={{ type: "spring", stiffness: 260, damping: 28, mass: 0.8 }}
           >
             <CDStage />

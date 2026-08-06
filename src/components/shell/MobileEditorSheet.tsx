@@ -56,6 +56,7 @@ export function MobileEditorSheet() {
                   type="button"
                   aria-label="关闭"
                   onClick={() => setOpen(false)}
+                  onPointerDown={(e) => e.stopPropagation()}
                   className="p-2 -m-1 rounded-lg text-[var(--muted)] hover:text-[var(--foreground)] transition-colors duration-200"
                 >
                   <X size={18} />
