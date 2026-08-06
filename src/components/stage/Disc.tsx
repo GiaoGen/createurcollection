@@ -28,12 +28,13 @@ export function Disc({ texture, isPlaying }: DiscProps) {
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useFrame((state, dt) => {
+    const d = Math.min(dt, 0.05);
     const disc = discRef.current;
     if (!disc) return;
     // Exponential accel/decel to/from the spin speed — no abrupt stop on pause.
     const target = isPlaying ? SPIN_RAD_PER_S : 0;
-    speed.current += (target - speed.current) * (1 - Math.exp(-dt * (isPlaying ? 8 : 1.2)));
-    disc.rotation.z -= speed.current * dt;
+    speed.current += (target - speed.current) * (1 - Math.exp(-d * (isPlaying ? 8 : 1.2)));
+    disc.rotation.z -= speed.current * d;
     // Keep the demand frame loop alive only while the disc is actually moving.
     if (Math.abs(speed.current) > 0.001) state.invalidate();
   });

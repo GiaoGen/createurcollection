@@ -146,19 +146,20 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
   };
 
   useFrame((state, dt) => {
+    const d = Math.min(dt, 0.05);
     const g = groupRef.current;
     const view = viewGroupRef.current;
     if (!g || !view) return;
 
     // Face tabs drive a smoothed target yaw — exponential damping, no setState.
-    const k = 1 - Math.exp(-dt * 6);
+    const k = 1 - Math.exp(-d * 6);
     g.rotation.y += (targetY - g.rotation.y) * k;
     if (Math.abs(targetY - g.rotation.y) < 0.001) g.rotation.y = targetY;
 
-    // Drag inertia + ease-back (velocity *exp(-dt*6), angle lerp 1-exp(-dt*3)).
+    // Drag inertia + ease-back (velocity *exp(-d*6), angle lerp 1-exp(-d*3)).
     if (!dragging.current) {
-      const vDamp = Math.exp(-dt * 6);
-      const rDamp = 1 - Math.exp(-dt * 3);
+      const vDamp = Math.exp(-d * 6);
+      const rDamp = 1 - Math.exp(-d * 3);
       dragVel.current.x *= vDamp;
       dragVel.current.y *= vDamp;
       dragRot.current.y = clamp(dragRot.current.y + dragVel.current.y, -DRAG_LIMIT_Y, DRAG_LIMIT_Y);
@@ -167,8 +168,8 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
       dragRot.current.y += (0 - dragRot.current.y) * rDamp;
     }
 
-    // Mouse parallax, smoothed 1-exp(-dt*4).
-    const dPar = 1 - Math.exp(-dt * 4);
+    // Mouse parallax, smoothed 1-exp(-d*4).
+    const dPar = 1 - Math.exp(-d * 4);
     parCur.current.x += (parTarget.current.x - parCur.current.x) * dPar;
     parCur.current.y += (parTarget.current.y - parCur.current.y) * dPar;
 
@@ -179,13 +180,13 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
     // Lid hinge spring → ~0.22 rad open.
     const lidTarget = openRef.current ? LID_OPEN : 0;
     const a = (lidTarget - lidAngle.current) * (SPRING_K / SPRING_M) - lidVel.current * (SPRING_C / SPRING_M);
-    lidVel.current += a * dt;
-    lidAngle.current += lidVel.current * dt;
+    lidVel.current += a * d;
+    lidAngle.current += lidVel.current * d;
     if (lidRef.current) lidRef.current.rotation.x = lidAngle.current;
 
     // Disc slide-out (~2/3 exposed), symmetric speed open ↔ close.
     const discTarget = openRef.current ? DISC_SLIDE : 0;
-    const dDisc = 1 - Math.exp(-dt * 3);
+    const dDisc = 1 - Math.exp(-d * 3);
     discX.current += (discTarget - discX.current) * dDisc;
     if (discGroupRef.current) discGroupRef.current.position.x = discX.current;
 
