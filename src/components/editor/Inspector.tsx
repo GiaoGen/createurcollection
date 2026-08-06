@@ -1,36 +1,54 @@
 "use client";
+import { AnimatePresence, motion } from "motion/react";
 import { useCompilationStore } from "@/store/use-compilation-store";
+import { InfoEditor } from "./InfoEditor";
+import { SpineEditor } from "./SpineEditor";
+import { FilterSelector } from "./FilterSelector";
+import { TrackEditor } from "./TrackEditor";
+import { EditorMode } from "@/types/compilation";
+import type { FC } from "react";
 
-const MODES = [
-  { mode: "info", label: "信息" },
-  { mode: "artwork", label: "封面" },
-  { mode: "filters", label: "滤镜" },
-  { mode: "spine", label: "侧标" },
-  { mode: "tracks", label: "曲目" },
-] as const;
+const PANELS: Record<EditorMode, FC> = {
+  info: InfoEditor,
+  artwork: FilterSelector, // Task 9 换为 ArtworkEditor 组合
+  filters: FilterSelector,
+  spine: SpineEditor,
+  tracks: TrackEditor,
+};
 
-// Task 5 占位：Task 6 将替换为完整 Inspector + 模式动画。
 export function Inspector({ className = "" }: { className?: string }) {
   const mode = useCompilationStore((s) => s.mode);
+  const face = useCompilationStore((s) => s.face);
   const setMode = useCompilationStore((s) => s.setMode);
+  const setFace = useCompilationStore((s) => s.setFace);
+  const Panel = PANELS[mode];
   return (
-    <aside className={`${className} flex-col bg-[var(--surface)]`}>
-      <div className="px-4 py-3 font-mono-num text-xs tracking-widest text-[var(--muted)] border-b border-[var(--line)]">
-        INSPECTOR
-      </div>
-      <div className="flex flex-wrap gap-1 p-3 border-b border-[var(--line)]">
-        {MODES.map((m) => (
-          <button key={m.mode} type="button" onClick={() => setMode(m.mode)}
-            className={`px-2.5 py-1 text-xs rounded-md transition-colors duration-200 ${
-              mode === m.mode
-                ? "text-[var(--foreground)] bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)]"
-                : "text-[var(--muted)] hover:text-[var(--foreground)]"
-            }`}>
-            {m.label}
+    <aside className={`${className} flex-col overflow-y-auto bg-[var(--surface)]`}>
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.div key={mode} className="p-4 flex-1 min-h-0 overflow-y-auto"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0, transition: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
+          exit={{ opacity: 0, y: -8, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } }}>
+          <Panel />
+        </motion.div>
+      </AnimatePresence>
+      {/* 模式 Tab（顶部分隔线，非悬浮） */}
+      <div className="shrink-0 border-t border-[var(--line)] p-1 flex gap-1">
+        {(["info", "artwork", "spine", "tracks"] as EditorMode[]).map((m) => (
+          <button key={m} onClick={() => setMode(m)}
+            className={`px-2 py-1 text-xs rounded-md transition-colors ${mode === m ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>
+            {m}
           </button>
         ))}
       </div>
-      <div className="p-4 text-sm text-[var(--muted)]">编辑器面板将在 Task 6 实现。</div>
+      <div className="shrink-0 border-t border-[var(--line)] p-2 flex gap-1 text-xs text-[var(--muted)]">
+        {(["front", "back", "disc"] as const).map((f) => (
+          <button key={f} onClick={() => setFace(f)}
+            className={`px-2 py-1 rounded-md border border-transparent ${face === f ? "border-[var(--strong-line)] text-[var(--foreground)]" : ""}`}>
+            {f}
+          </button>
+        ))}
+      </div>
     </aside>
   );
 }
