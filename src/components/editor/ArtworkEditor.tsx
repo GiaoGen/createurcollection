@@ -4,45 +4,74 @@ import { AnimatePresence, motion } from "motion/react";
 import Cropper from "react-easy-crop";
 import type { Area, Point } from "react-easy-crop";
 import { useCompilationStore } from "@/store/use-compilation-store";
-import { compressImage, dataUrlToBlob, storeImage, revokeObjectUrl, useObjectUrl } from "@/lib/image/blobs";
+import { compressImage, dataUrlToBlob, storeImage, revokeObjectUrl, getImageUrl } from "@/lib/image/blobs";
 import { cropImage } from "@/lib/image/crop";
 
 export function ArtworkEditor() {
   const face = useCompilationStore((s) => s.face);
   const art = useCompilationStore((s) => s.project[face === "front" ? "frontCover" : face === "back" ? "backCover" : "discArtwork"]);
   const setArtwork = useCompilationStore((s) => s.setArtwork);
-  // 已提交图的 Object URL（hold=false：切面/裁剪确认时先清空再加载，避免显示旧面的图）。
-  const committedUrl = useObjectUrl(art.imageId, false);
   // 尚未提交的本地上传预览（压缩后 Object URL）；applyCrop 提交后仍保留，供继续再裁。
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const pendingUrlRef = useRef<string | null>(null);
+  // 会话裁剪源：当前面已提交图的 Object URL，进入该面时加载。
+  // 关键：applyCrop 提交新 imageId 时【不】替换此源——无新上传时二次应用裁剪仍从本会话的
+  // 原始源派生（与旧版一致），不会裁剪复合叠加，也不在确认瞬间闪占位。
+  const [sessionUrl, setSessionUrl] = useState<string | null>(null);
+  const sessionUrlRef = useRef<string | null>(null);
   // Cropper 的实时状态：crop（px Point）与 zoom 只存本地，避免与 store 中已提交的
   // croppedAreaPixels（px，相对媒体包围盒）混用导致显示漂移。zoom/rotation 仍持久化到 store。
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(art.zoom);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // 裁剪源：优先本地未提交预览；否则回落到当前面的已提交图。
-  const src = pendingUrl ?? committedUrl;
+  // 裁剪源：优先本地未提交预览；否则回落到当前面的会话源（已提交图）。
+  const src = pendingUrl ?? sessionUrl;
 
-  // 切换面（正面/背面/盘面）时：丢弃旧面的未提交预览，重置 crop/zoom；
-  // 已提交图由 useObjectUrl(art.imageId) 自动切换到新面的图。
-  const prevFace = useRef(face);
+  // 进入某面（含挂载）时：丢弃旧面的未提交预览与会话源，重置 crop/zoom，
+  // 并异步加载该面已提交图为会话源。仅以 face 为依赖：applyCrop 提交新 imageId
+  // 不算切面，不会重载会话源（保证二次应用裁剪仍从原始源派生）。
   useEffect(() => {
-    if (prevFace.current !== face) {
-      prevFace.current = face;
+    const targetFace = face;
+    const committed = useCompilationStore.getState().project[
+      targetFace === "front" ? "frontCover" : targetFace === "back" ? "backCover" : "discArtwork"
+    ];
+    const id = committed.imageId;
+    let cancelled = false;
+    // 清空/重置走微任务（下一次绘制前生效），避开 react-hooks/set-state-in-effect。
+    queueMicrotask(() => {
+      if (cancelled) return;
       if (pendingUrlRef.current) {
         revokeObjectUrl(pendingUrlRef.current);
         pendingUrlRef.current = null;
         setPendingUrl(null);
       }
+      if (sessionUrlRef.current) {
+        revokeObjectUrl(sessionUrlRef.current);
+        sessionUrlRef.current = null;
+        setSessionUrl(null);
+      }
       setCrop({ x: 0, y: 0 });
-      setZoom(art.zoom);
-    }
-  }, [face, art.zoom]);
+      setZoom(committed.zoom);
+    });
+    if (!id) return () => { cancelled = true; };
+    getImageUrl(id).then((url) => {
+      if (cancelled) {
+        if (url) revokeObjectUrl(url);
+        return;
+      }
+      if (sessionUrlRef.current) revokeObjectUrl(sessionUrlRef.current);
+      sessionUrlRef.current = url;
+      setSessionUrl(url);
+    });
+    return () => { cancelled = true; };
+  }, [face]);
 
-  // 卸载时释放本地预览 URL（已提交图由 useObjectUrl 自行释放）。
-  useEffect(() => () => { if (pendingUrlRef.current) revokeObjectUrl(pendingUrlRef.current); }, []);
+  // 卸载时释放本地预览与会话源 URL。
+  useEffect(() => () => {
+    if (pendingUrlRef.current) revokeObjectUrl(pendingUrlRef.current);
+    if (sessionUrlRef.current) revokeObjectUrl(sessionUrlRef.current);
+  }, []);
 
   // 追踪当前面，供异步操作（上传/裁剪）完成后校验：期间切换了面则丢弃结果，避免写入错误的面
   const currentFaceRef = useRef(face);
@@ -76,11 +105,11 @@ export function ArtworkEditor() {
     const targetFace = face;
     const out = await cropImage(src, art.crop, art.rotation); // art.crop 为 croppedAreaPixels（px）
     if (currentFaceRef.current !== targetFace) return; // 处理期间切换了面：不写入错误的面
-    const blob = dataUrlToBlob(out);
+    const blob = await dataUrlToBlob(out);
     const stored = await storeImage(blob);
     if (currentFaceRef.current !== targetFace) return; // 落库期间又切面：丢弃
     setArtwork(targetFace, { imageId: stored.id });
-    // 保留 pendingUrl（未裁剪预览），cropper 继续显示原始图供再裁
+    // 不替换 src：会话源（pendingUrl 或 sessionUrl）保持裁剪前的原始源，供继续再裁（二次应用不叠加）。
   }, [src, art.crop, art.rotation, face, setArtwork]);
 
   const reset = useCallback(() => {
@@ -88,6 +117,11 @@ export function ArtworkEditor() {
       revokeObjectUrl(pendingUrlRef.current);
       pendingUrlRef.current = null;
       setPendingUrl(null);
+    }
+    if (sessionUrlRef.current) {
+      revokeObjectUrl(sessionUrlRef.current);
+      sessionUrlRef.current = null;
+      setSessionUrl(null);
     }
     setCrop({ x: 0, y: 0 });
     setZoom(1);

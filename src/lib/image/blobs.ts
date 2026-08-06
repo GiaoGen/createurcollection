@@ -7,6 +7,7 @@ import { getStoredImage, saveStoredImage } from "@/store/db";
 
 const MAX_EDGE = 2048;      // 压缩最长边（CLAUDE.md：1600–2048px）
 const WEBP_QUALITY = 0.85;
+const MAX_FILE_BYTES = 20 * 1024 * 1024; // 上传大小上限（CLAUDE.md：校验类型 + 限制大小）
 
 /** 解码 Blob/File → HTMLImageElement；Object URL 在本函数内创建并释放。 */
 function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {
@@ -41,6 +42,9 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
  */
 export async function compressImage(file: File): Promise<{ blob: Blob; width: number; height: number }> {
   if (!file.type.startsWith("image/")) throw new Error(`unsupported file type: ${file.type}`);
+  if (file.size > MAX_FILE_BYTES) {
+    throw new Error(`file too large: ${(file.size / (1024 * 1024)).toFixed(1)}MB (limit 20MB)`);
+  }
   const img = await loadImageFromBlob(file);
   const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -61,16 +65,26 @@ export async function compressImage(file: File): Promise<{ blob: Blob; width: nu
   return { blob, width: w, height: h };
 }
 
-/** dataURL → Blob（裁剪/滤镜输出的 dataURL 转落库 Blob）。 */
-export function dataUrlToBlob(dataUrl: string): Blob {
-  const comma = dataUrl.indexOf(",");
-  const head = comma >= 0 ? dataUrl.slice(0, comma) : "";
-  const body = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-  const mime = /^data:([^;]+);/i.exec(head)?.[1] ?? "image/jpeg";
-  const bin = atob(body);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
+/**
+ * dataURL → Blob（裁剪/滤镜输出的 dataURL 转落库 Blob）。
+ * 异步解码（fetch(dataURL)），避免同步 atob+字节循环阻塞主线程；
+ * 兜底：fetch 异常时回退同步解码，保证仍返回 Blob。
+ */
+export async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  try {
+    const res = await fetch(dataUrl);
+    if (!res.ok) throw new Error(`dataURL decode failed: ${res.status}`);
+    return await res.blob();
+  } catch {
+    const comma = dataUrl.indexOf(",");
+    const head = comma >= 0 ? dataUrl.slice(0, comma) : "";
+    const body = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    const mime = /^data:([^;]+);/i.exec(head)?.[1] ?? "image/jpeg";
+    const bin = atob(body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
 }
 
 /**

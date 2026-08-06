@@ -92,7 +92,8 @@ interface LegacyPersisted { state?: { project?: LegacyProject }; project?: Legac
 /**
  * 一次性迁移旧版 localStorage 数据 → IndexedDB 项目。
  * 曲目的音频字段（旧 Track.duration/src）不再持久化（不存播放 URL）；图片 dataURL → StoredImage。
- * 迁移成功后删除旧键，避免重复执行。返回迁移出的项目；无旧数据返回 null。
+ * 仅在项目成功 `db.projects.put` 之后才删除旧键（先删键后落库会在写库失败时丢失旧数据）。
+ * 返回迁移出的项目；无旧数据返回 null。
  */
 async function migrateLegacy(): Promise<CompilationProject | null> {
   if (typeof window === "undefined") return null;
@@ -106,14 +107,13 @@ async function migrateLegacy(): Promise<CompilationProject | null> {
   }
   const legacy = parsed.state?.project ?? parsed.project;
   if (!legacy || !Array.isArray(legacy.tracks)) return null;
-  localStorage.removeItem(LEGACY_KEY);
   const now = Date.now();
 
   const migrateArtwork = async (a: LegacyArtwork): Promise<ArtworkState> => {
     let imageId: string | null = null;
     if (a.imageUrl) {
       try {
-        const blob = dataUrlToBlob(a.imageUrl);
+        const blob = await dataUrlToBlob(a.imageUrl);
         imageId = (await storeImage(blob)).id;
       } catch {
         imageId = null; // 单张图片损坏不阻塞整体迁移
@@ -128,7 +128,7 @@ async function migrateLegacy(): Promise<CompilationProject | null> {
     migrateArtwork(legacy.discArtwork),
   ]);
 
-  return {
+  const project: CompilationProject = {
     id: legacy.id ?? createId("proj"),
     title: legacy.title,
     subtitle: legacy.subtitle,
@@ -151,6 +151,13 @@ async function migrateLegacy(): Promise<CompilationProject | null> {
     createdAt: now,
     updatedAt: now,
   };
+  try {
+    await saveProject(project); // 先落库：持久化确认成功后才允许删除旧键
+    localStorage.removeItem(LEGACY_KEY);
+  } catch {
+    // 落库失败（配额/隐私模式）：保留旧键，下次加载重试；内存中仍返回迁移结果供本次会话编辑。
+  }
+  return project;
 }
 
 interface CompilationStore {
@@ -215,7 +222,13 @@ async function boot(): Promise<void> {
   if (typeof window === "undefined" || booted) return;
   booted = true;
   try {
-    if (navigator.storage) await navigator.storage.persist(); // 申请长期缓存，尽力而为
+    if (navigator.storage) {
+      // 申请长期缓存，尽力而为；2s 超时，避免 persist 永不 settle 卡住 hydrated。
+      await Promise.race([
+        navigator.storage.persist(),
+        new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+      ]);
+    }
   } catch {
     // 浏览器不支持/拒绝：不影响编辑。
   }
