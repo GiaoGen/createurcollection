@@ -17,7 +17,7 @@
 - 3D：`<Canvas frameloop="demand" dpr={[1,1.5]}>`；静止停渲；高频角度走 ref/useFrame，禁止 pointermove→setState。
 - 图片：上传校验类型/大小，压缩 WebP/JPEG（最长边 ≤1600–2048px）为 Blob 入 IndexedDB；Object URL 用后释放；纹理更新 `dispose` 旧纹理。
 - 存储：项目数据（含图片 Blob）以 IndexedDB 为主存储（Dexie），`navigator.storage.persist()` 申请长期缓存；localStorage 只存偏好。自动保存防抖 500–1000ms；第三方 API 不可用不影响本地编辑/查看。
-- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 离线回退；`NeteaseProvider` 纯前端——浏览器直调第三方网易云 API（Base URL `NEXT_PUBLIC_NETEASE_API_BASE_URL`，统一 `lib/netease/` 客户端），仅公开内容：搜索/公开歌单导入/曲目信息/封面/`/song/url/v1` 网页播放。**无任何自有后端、无代理、无登录、不存 Cookie、不持久化播放 URL**；VIP/版权受限返回空 URL → 播放禁用并显示「受限」，不做绕过、不开解灰。
+- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 离线回退；`NeteaseProvider` 纯前端——浏览器直调第三方网易云 API（Base URL `NEXT_PUBLIC_NETEASE_API_BASE_URL`，统一 `lib/netease/` 客户端）。**第三方 API 扫码登录**：`qr/key`→`qr/create`→`qr/check` 轮询（每次带新 timestamp）→`login/status` 校验；Cookie 默认存 `sessionStorage`，仅用户主动开启「记住登录」才存 IndexedDB（不写 localStorage/URL/导出文件）。登录后读取用户歌单与红心歌曲 + 公开歌单导入 + 搜索；经 `/song/url/v1`（失败回退 `/song/url`）携带 Cookie 播放，**播放 URL 不持久化**；`PlaybackResolution.availability` 非 playable → 保留歌曲并提示「当前账号暂无播放权限」、自动切下一首、提供「在网易云打开」，不做绕过、不开解灰。**无任何自有后端、无代理、不自建登录系统**。
 - 无障碍：必须支持 `@media (prefers-reduced-motion: reduce)`。
 - 按钮必须真实可用；移动端不做桌面等比缩放。
 - 验收（§十二）全部通过；`pnpm lint` 与 `pnpm build` 必须通过。
@@ -73,12 +73,12 @@ src/
 │  │  ├─ demo-provider.ts     # DemoMusicProvider（离线回退）
 │  │  └─ netease-provider.ts  # NeteaseProvider（T18-T20，接 NeteaseClient）
 │  ├─ netease/                # 纯前端网易云客户端（T18）
-│  │  ├─ config.ts            # 读 NEXT_PUBLIC_NETEASE_API_BASE_URL
-│  │  ├─ client.ts            # NeteaseClient：fetch + 超时/错误归一 + 缓存
-│  │  ├─ types.ts             # API 响应类型
-│  │  ├─ normalize.ts         # API → 应用模型 归一
-│  │  ├─ playlist.ts          # 公开歌单链接/ID 解析 + 拉取
-│  │  └─ playback.ts          # 播放 URL 获取 + 内存短缓存 + 过期一次重试
+│  │  ├─ client.ts            # NeteaseClient：Base URL 读取 + fetch + 超时/CORS 错误归一 + Cookie 显式传递 + 缓存
+│  │  ├─ auth.ts              # 扫码登录：qr/key · qr/create · qr/check 轮询 · status 校验 · 登出；Cookie sessionStorage/IndexedDB
+│  │  ├─ types.ts             # API 响应类型 + PlaybackResolution + StoredNeteaseSession
+│  │  ├─ normalize.ts         # API → CompilationTrack / PlaybackResolution
+│  │  ├─ playlist.ts          # 用户歌单 / 红心歌曲 / 公开歌单（链接/ID 解析 + 拉取）
+│  │  └─ playback.ts          # 播放 URL（/song/url/v1 → /song/url 回退）+ 内存短缓存 + 过期一次重试
 │  ├─ backup.ts               # .album.json / ZIP 备份导出导入（T17）
 │  ├─ export-image.ts         # toPng(ExportCard node)
 │  └─ storage.ts              # createId / formatTime 等小工具
@@ -1567,12 +1567,14 @@ export type TrackProvider = "demo" | "netease";
 export interface CompilationTrack {
   id: string;
   provider: TrackProvider;
-  providerTrackId: string | null;   // netease 歌曲 id；demo 为 null
+  providerTrackId?: number | null;  // 网易云歌曲 id；demo 为 null
   title: string;
   artist: string;
   album?: string;
   artworkUrl?: string;              // 网易云封面（网络 URL，不落库为 blob）
   durationMs?: number;
+  sourcePlaylistId?: number;        // 来源歌单 ID
+  externalUrl?: string;             // 「在网易云打开」链接
 }
 export interface ArtworkState {
   sourceName: string | null;
@@ -1592,6 +1594,7 @@ export interface CompilationProject {
 }
 export interface StoredImage { id: string; blob: Blob; width: number; height: number; createdAt: number; }
 ```
+`PlayerState` 增加 `loading: boolean` / `volume: number` / `error: string | null`（T18/T20 使用）。
 
 - [ ] **Step 2: `src/store/db.ts`（Dexie）**
 
@@ -1692,109 +1695,122 @@ git add src/lib/backup.ts src/components/export/BackupActions.tsx && git commit 
 
 ---
 
-## Task 18: NeteaseClient 纯前端库
+## Task 18: NeteaseClient 纯前端库（含扫码登录 auth 与 Cookie 存储）
 
-> 需求变更（2026-08-06）：**纯前端**，浏览器直调第三方网易云 API（无后端代理、无登录、无 Cookie）。Base URL 由 `NEXT_PUBLIC_NETEASE_API_BASE_URL` 提供（需 CORS-enabled 的公共实例）。这是纯数据/逻辑库，**无 UI，不需设计确认**。
+> 需求变更（2026-08-06）：**纯前端 + 第三方 API 扫码登录**。浏览器直调第三方网易云 API（无后端代理、不自建登录系统）。Base URL 由 `NEXT_PUBLIC_NETEASE_API_BASE_URL` 提供（需 CORS-enabled 的公共实例）。本任务是数据/逻辑库（含登录态与 Cookie 存储层），**无 UI，不需设计确认**；登录 UI 归 T19。
 
 **Files:**
-- Create: `src/lib/netease/config.ts`（读 `NEXT_PUBLIC_NETEASE_API_BASE_URL`；为空则 netease 能力禁用、回退 demo）
-- Create: `src/lib/netease/types.ts`（API 响应类型：搜索/歌单/歌曲详情/播放 URL）
-- Create: `src/lib/netease/client.ts`（`NeteaseClient`：`searchTracks(q)` / `getPlaylist(id)` / `getPlaylistTracks(id)` / `getTrackDetail(id)` / `getPlaybackUrl(id)`；统一 fetch + 超时（~8s）+ 错误归一 + 缓存）
-- Create: `src/lib/netease/normalize.ts`（API 响应 → 应用模型 `CompilationTrack`/`NeteaseTrackMeta`）
-- Create: `src/lib/netease/playlist.ts`（公开歌单链接/ID 解析：`https://music.163.com/playlist?id=X`、`#/playlist?id=X`、纯数字 ID）
-- Create: `src/lib/netease/playback.ts`（`getPlaybackUrl` 内存短缓存；过期允许一次重试）
-- Modify: `src/lib/music/netease-provider.ts`（真实实现，接 NeteaseClient；无 `providerTrackId` 返回 null）
+- Create: `src/lib/netease/types.ts`（API 响应类型 + `PlaybackResolution` + `StoredNeteaseSession`）
+- Create: `src/lib/netease/client.ts`（`NeteaseClient`：读 Base URL；统一 fetch + 超时（~8s）+ CORS/网络/HTTP 错误归一；`request(path, { params, cookie, method })`，Cookie 显式传递——POST Body 优先、Query 参数用 `encodeURIComponent`；TTL 缓存）
+- Create: `src/lib/netease/auth.ts`（扫码登录：`getQrKey` / `createQr(key)` / `pollQrCheck(key, signal)` / `verifyLogin(cookie)` / `logout()`；Cookie 存储层：默认 sessionStorage，用户开启「记住登录」→ IndexedDB `StoredNeteaseSession`；登出清除）
+- Create: `src/lib/netease/normalize.ts`（API → `CompilationTrack` / `PlaybackResolution`）
+- Create: `src/lib/netease/playlist.ts`（用户歌单 `/user/playlist?uid=`、红心歌曲 ID 列表 + 批量详情、公开歌单链接/ID 解析）
+- Create: `src/lib/netease/playback.ts`（`getPlaybackUrl(id, cookie)`：优先 `/song/url/v1`，失败/结构不兼容回退 `/song/url`；内存短缓存；过期允许一次重试）
+- Modify: `src/lib/music/netease-provider.ts`（真实实现，接 NeteaseClient + 登录态）
 - Create: `.env.example`（`NEXT_PUBLIC_NETEASE_API_BASE_URL=...`，注释说明需公共 CORS 实例）
 
 **Interfaces:**
-- Consumes: `src/types/compilation.ts`（`CompilationTrack`）；`MusicProvider` 接口。
-- Produces: `NeteaseClient`；真实 `NeteaseProvider`（`search`/`resolve`/`getPlayableSource`）。缓存策略：搜索 10–30min、歌单 1–6h、曲目详情 24h（内存/IndexedDB 均可）；播放 URL **仅内存短缓存，绝不持久化**（有时效）。
+- Consumes: `src/types/compilation.ts`（`CompilationTrack`）；`MusicProvider` 接口；`store/db.ts`（记住登录时存 Session）。
+- Produces: `NeteaseClient`；`auth` 登录态（含 Cookie 存取）；真实 `NeteaseProvider`（`search`/`resolve`/`getPlayableSource`）。缓存：搜索 10–30min、歌单 1–6h、曲目详情 24h；播放 URL **仅内存短缓存，绝不持久化**（有时效）。
 
-- [ ] **Step 1: `config.ts` + `types.ts`**
+- [ ] **Step 1: `types.ts` + `client.ts`**
 
-`NEXT_PUBLIC_NETEASE_API_BASE_URL` 为空 → `isNeteaseAvailable()` 返回 false，`NeteaseProvider` 退化为空实现（不报错）。类型对齐所选 API 的真实响应字段（`result.songs[]`、`playlist.tracks[]`、`data[0].url` 等）。
+`NEXT_PUBLIC_NETEASE_API_BASE_URL` 为空 → `isNeteaseAvailable()` 返回 false，`NeteaseProvider` 退化为空实现（不报错）。`request<T>(path, { params, cookie, method })`：Query 拼接或 POST JSON Body；`AbortController` 超时；错误归一 `NeteaseError { kind: "timeout"|"network"|"cors"|"api"|"http", message }`；按 `(path+params)` TTL 缓存。
 
-- [ ] **Step 2: `client.ts`——统一请求层**
+- [ ] **Step 2: `auth.ts`——扫码登录 + Cookie 存储**
 
-`request<T>(path, params)`：`fetch(base + path + qs)`；`AbortController` 超时；非 2xx / 网络错误 / CORS 错误统一归一为 `NeteaseError { kind: "timeout"|"network"|"api"|"http" , message }`；按 `(path+params)` 查缓存、写入缓存（带 TTL）。
+`getQrKey()` → `/login/qr/key?timestamp={Date.now()}`；`createQr(key)` → `/login/qr/create?key&qrimg=true&timestamp`，优先 API 返回 base64 图（无则留内容供前端生成）；`pollQrCheck(key, signal)` → 每 2s `/login/qr/check?key&timestamp&noCookie=true`，**每次新 timestamp**，AbortController 可取消；`800`/`801`/`802`/`803` 状态映射，`803` 提取 cookie 停轮询。`verifyLogin(cookie)` → `/login/status` 显式带 Cookie，失败再请求账号信息验证。Cookie 存取封装：`saveSession/loadSession/clearSession`——默认 sessionStorage；`remember` 为 true 时写 IndexedDB（`StoredNeteaseSession`）。登出清空 sessionStorage + IndexedDB + 内存用户态 + 私人歌单缓存。
 
 - [ ] **Step 3: `normalize.ts` + `playlist.ts` + `playback.ts`**
 
-`normalizeTrack(raw)` → `{ providerTrackId, title, artist, album, artworkUrl, durationMs }`。`parsePlaylistInput(input)` 从链接/`#/`/裸 ID 提取数字 id。`getPlaybackUrl(id)`：调 `/song/url/v1?id=`；`data[0].url` 空/`null` → 受限返回 null；URL 过期（播放器 404）时允许重取一次。
+`normalizeTrack(raw)` → CompilationTrack 字段（含 `sourcePlaylistId`/`externalUrl`）；`normalizePlayback(data)` → `PlaybackResolution`。`getUserPlaylists(uid, cookie)` / `getLikedTrackIds(uid, cookie)` / `getPlaylistTracks(id, cookie)` / `parsePlaylistInput(input)`。`getPlaybackUrl(id, cookie)`：`/song/url/v1` 优先，空/异常回退 `/song/url`；`url` 空 → `availability: "vip-required"|"unavailable"`。
 
 - [ ] **Step 4: `netease-provider.ts` 真实实现**
 
-`search(q)` → `client.searchTracks(q)` → 归一列表；`resolve(input)` → 解析为歌单或曲目元数据（歌单链接 → 歌单名 + 曲目列表，供批量添加）；`getPlayableSource(track)` → 有 `providerTrackId` 才 `getPlaybackUrl`，无则 null。
+`search(q)` → `client.searchTracks(q)`；`getPlayableSource(track)` → 读 Cookie（无 Cookie 且曲目 netease → 返回 `availability:"unavailable"` + 提示需登录）→ `getPlaybackUrl(providerTrackId, cookie)` → 返回 `{ url, kind, durationMs, availability }`。
 
 - [ ] **Step 5: 验证**
 
-`pnpm lint && pnpm build`。`NEXT_PUBLIC_NETEASE_API_BASE_URL` 配置有效实例时：搜索/歌单拉取/播放 URL 正常返回；未配置时应用照常运行（demo 回退）；网络断开时错误归一正确、不抛未捕获异常。
+`pnpm lint && pnpm build`。配置有效 API 实例：`qr/key` → `qr/create` → `qr/check` 轮询到 803 取到 cookie；`/login/status` 校验通过；Cookie 存 sessionStorage；开启记住登录 → IndexedDB 有 StoredNeteaseSession；未配置时应用照常运行（demo 回退）。
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/lib/netease src/lib/music/netease-provider.ts .env.example && git commit -m "feat: pure-frontend netease client library"
+git add src/lib/netease src/lib/music/netease-provider.ts .env.example && git commit -m "feat: pure-frontend netease client with qr login and cookie storage"
 ```
 
 ---
 
-## Task 19: 网易云添加 UI（NeteasePicker：公开歌单导入 + 搜索）
+## Task 19: 网易云 UI（NeteasePicker：扫码登录 + 用户歌单/红心 + 搜索 + 多选添加）
 
-> 前端 UI 设计**必须先经用户确认**再实现。
+> 前端 UI 设计**必须先经用户确认**再实现（登录弹层 + 来源面板）。
 
 **Files:**
-- Create: `src/components/editor/NeteasePicker.tsx`（公开歌单导入 Tab + 搜索 Tab，多选 → 添加）
-- Modify: `src/components/editor/TrackEditor.tsx`（「从网易云添加」入口按钮）
-- Modify: `src/components/shell/MobileEditorSheet.tsx`（移动端复用同一 picker，无需重写）
+- Create: `src/components/editor/NeteasePicker.tsx`（登录态区 + 三来源 Tab：我喜欢的音乐 / 我的歌单 / 搜索）
+- Modify: `src/components/editor/TrackEditor.tsx`（「从网易云添加」入口 → 打开 NeteasePicker）
+- Modify: `src/components/shell/MobileEditorSheet.tsx`（移动端复用同一 picker）
+- Create: `src/store/use-netease-store.ts`（登录态订阅：status/nickname/avatar/userId/remember；actions: login/logout/refresh——逻辑在 T18 auth，此 store 只做 UI 订阅）
 
 **Interfaces:**
-- Consumes: `NeteaseClient`（T18）；store `addTrack`。
-- Produces: 输入公开歌单链接/ID → 预览歌单（封面/名称/曲目列表）；搜索关键词 → 结果列表（封面/歌名/艺术家/时长）；多选 → `addTrack` 批量添加（去重：已存在同 `providerTrackId` 的行标记「已添加」）；受限/加载/空/API 错误状态展示。
+- Consumes: `auth`（T18）、`NeteaseClient`（T18）、store `addTrack`。
+- Produces: 登录弹层（QR 图 + 状态文字 + 记住登录勾选 + 固定安全提示文案）；登录后「我喜欢的音乐」与「我的歌单」列表 + 搜索；单选/多选/全选 → 批量 `addTrack`（去重：同 `providerTrackId` 标记「已添加」）；Cookie 失效 → 提示重新登录，**不删除已导入歌曲**；受限/加载/空/API 错误状态展示。
 
-- [ ] **Step 1: 交互与状态设计确认**（先向用户展示 ASCII 布局 + 交互流，确认后再实现）
-- [ ] **Step 2: `NeteasePicker.tsx` 实现**
+- [ ] **Step 1: 交互与状态设计确认**（向用户展示 ASCII：登录弹层 + 来源面板布局与交互流，确认后再实现）
+- [ ] **Step 2: `use-netease-store.ts`**
 
-两个入口：① 歌单导入——输入框 + 「解析」→ `parsePlaylistInput` → `getPlaylist`/`getPlaylistTracks` → 列表；② 搜索——关键词 → `searchTracks`。列表行：封面缩略 + 歌名/艺术家 + 时长 + 勾选；底部「添加所选」按钮（禁用当无勾选）。`NeteaseClient` 不可用（未配置 base URL）时显示说明文字而非报错。
-- [ ] **Step 3: TrackEditor 入口**
+登录态订阅 store：`{ status: "anonymous"|"pending"|"logged-in"|"expired", nickname, avatarUrl, userId, remember }` + `login/refreshUser/logout`。挂载时 `loadSession()`（sessionStorage 优先，IndexedDB 回退）。
+- [ ] **Step 3: 登录弹层**
+
+QR base64 图展示（T18 `createQr`，无图则用内容生成）；轮询状态 801「等待扫码」/802「已扫码，请在手机上确认」/800「二维码已过期，点击刷新」；「记住登录」checkbox（默认关 → 只存 sessionStorage；开 → 存 IndexedDB `StoredNeteaseSession`）；**固定安全提示**：「本功能通过第三方网易云音乐接口实现。登录凭证仅保存在当前浏览器中。请仅在你信任的 API 服务上使用扫码登录。」；登出按钮；卸载/关闭清除定时器与 AbortController。
+- [ ] **Step 4: 来源面板**
+
+「我喜欢的音乐」：`getLikedTrackIds` → 批量详情；「我的歌单」：`getUserPlaylists` 列表 → 点开读曲目；「搜索」：关键词 → `searchTracks`。行 = 封面缩略 + 歌名/艺术家/时长 + 勾选；顶部全选；底部「添加所选」（无勾选禁用）；未登录显示「扫码登录」占位；`NeteaseClient` 不可用（未配置 base URL）时显示说明文字而非报错。
+- [ ] **Step 5: TrackEditor 入口**
 
 TrackEditor 加「从网易云添加」按钮 → 打开 NeteasePicker（桌面 Inspector 内联展开或弹层；移动端在 Bottom Sheet 内）。
-- [ ] **Step 4: 验证**
+- [ ] **Step 6: 验证**
 
-`pnpm lint && pnpm build`。配置 API 后：歌单链接导入成功、搜索命中、批量添加去重、刷新保留（持久化 `providerTrackId`/元数据）；API 不可用时优雅降级。
-- [ ] **Step 5: Commit**
+`pnpm lint && pnpm build`。配置 API 后：扫码登录成功（状态流转 801→802→803）、刷新保留、记住登录后 IndexedDB 有 session；可拉用户歌单/红心、搜索命中、批量添加去重；Cookie 失效提示重新登录但已导入歌曲保留；API 不可用时优雅降级。
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/components/editor/NeteasePicker.tsx src/components/editor/TrackEditor.tsx && git commit -m "feat: netease add UI with playlist import and search"
+git add src/components/editor/NeteasePicker.tsx src/components/editor/TrackEditor.tsx src/store/use-netease-store.ts && git commit -m "feat: netease ui with qr login, playlists, liked, search"
 ```
 
 ---
 
-## Task 20: 网易云播放 + 受限/离线状态
+## Task 20: 网易云播放（携带 Cookie）+ 受限/离线状态 + PlayerState 扩展
 
 **Files:**
-- Modify: `src/hooks/use-player-engine.ts`（NetEase 播放：点击 → 读 `providerTrackId` → 请求最新播放 URL → 设 src → play；URL 过期一次重试；受限 → 禁用 + 提示）
-- Modify: `src/components/player/Player.tsx`、`src/components/editor/TrackEditor.tsx`（受限/加载/离线状态显示；「在网易云打开」fallback）
+- Modify: `src/hooks/use-player-engine.ts`（全局单例 `<audio>`；点击 → 读 `providerTrackId` + 当前 Cookie → `getPlaybackUrl` → 设 src → play；`loading` 状态；`/song/url/v1`→`/song/url` 回退已封装；URL 过期一次重试；`availability` 非 playable → 停止 + 提示 + **自动切下一首**）
+- Modify: `src/store/use-compilation-store.ts`（`PlayerState` 扩展 `loading`/`volume`/`error`；全局 audio 单例由引擎持有）
+- Modify: `src/components/player/Player.tsx`、`src/components/editor/TrackEditor.tsx`（加载/受限/离线状态 + 「在网易云打开」）
+- Modify: `src/components/stage/Disc.tsx`（loading → 轻微等待、playing 平滑加速、error 停止并联动自动切下一首）
 - Modify: `src/components/shell/AppShell.tsx`（`online`/`offline` 监听 → 离线态显示）
 
 **Interfaces:**
 - Consumes: `NeteaseProvider`/`getPlaybackUrl`（T18）、播放引擎（T11）、store。
-- Produces: 网易云曲目可真实播放；VIP/版权/区域受限显示「暂时无法播放/受限」；错误处理不崩溃、不无限重试、不 toast 轰炸；离线显示提示。
+- Produces: 网易云曲目用账号权限真实播放（携带 Cookie）；无权限**保留歌曲并提示、自动切下一首**；错误处理不崩溃、不无限重试、不 toast 轰炸；离线提示；全局 audio 单例。
 
-- [ ] **Step 1: 引擎受限与重试**
+- [ ] **Step 1: 引擎播放 + 受限/重试**
 
-`play()`：`getPlayableSource` 返回 null → 显示受限（`player.limitedTrackId` 或 per-track 状态）并 `setIsPlaying(false)`；`<audio>` error 事件 → 若是网易云 URL 且未重试过 → 重取一次播放 URL；仍失败 → 停止 + 提示。**不自动连播受限曲目**。
+`play(id)`：netease 曲目 → 读 Cookie（无 → 停止 + `error:"请先登录"`）；`getPlayableSource` 返回 `availability !== "playable"` → 停止当前、提示「当前账号暂无播放权限」、自动 `next()`；`<audio>` error → 网易云 URL 未重试过 → 重取一次；仍失败 → 停止 + 提示。`loading` 在请求期间置 true。
 
-- [ ] **Step 2: 错误与状态 UI**
+- [ ] **Step 2: PlayerState 与 CD 联动**
 
-播放器当前曲目：受限 → 「受限 · 在网易云打开」（`https://music.163.com/song?id=<id>` 新窗口）；TrackEditor 受限行右侧小字「受限」。离线（`navigator.onLine=false`）：网易云行显示「离线」，本地 demo/已缓存仍可播。
+store `player` 增加 `loading`/`volume`/`error`。Disc：loading → 轻微等待态（rotation 几近静止微抖）；playing → 平滑加速（`speed += (2.8-speed)*(1-exp(-dt*8))`）；pause → 平滑减速；error → 停止。监听 `loadstart/canplay/playing/pause/timeupdate/ended/error/stalled/waiting`。
 
-- [ ] **Step 3: 验证**
+- [ ] **Step 3: 状态 UI + 离线**
 
-`pnpm lint && pnpm build`。配置 API 后：公开曲目可播（进度/唱片联动）；受限曲目播放禁用 + 提示；断网时网易云曲目不可播但 demo 正常；连点不崩、无重复 toast。
-- [ ] **Step 4: Commit**
+播放器当前曲目：受限 → 「受限 · 在网易云打开」（`track.externalUrl` 或 `https://music.163.com/song?id=<id>` 新窗口）；loading → 波形灰态；TrackEditor 受限行小字「受限」。离线（`navigator.onLine=false`）：网易云行显示「离线」，本地 demo/已缓存仍可播。
+
+- [ ] **Step 4: 验证**
+
+`pnpm lint && pnpm build`。配置 API 后：公开曲目用账号权限可播（进度/唱片联动）；受限曲目停止 + 提示 + **自动切下一首**；断网时网易云曲目不可播但 demo 正常；连点不崩、无重复 toast。
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/hooks/use-player-engine.ts src/components/player src/components/editor/TrackEditor.tsx src/components/shell && git commit -m "feat: netease playback with restricted and offline states"
+git add src/hooks/use-player-engine.ts src/store/use-compilation-store.ts src/components/player src/components/editor/TrackEditor.tsx src/components/stage/Disc.tsx src/components/shell && git commit -m "feat: netease playback with restricted/offline states and player state"
 ```
 
 ---
