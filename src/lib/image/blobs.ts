@@ -7,7 +7,7 @@ import { getStoredImage, saveStoredImage } from "@/store/db";
 
 const MAX_EDGE = 2048;      // 压缩最长边（CLAUDE.md：1600–2048px）
 const WEBP_QUALITY = 0.85;
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // 上传大小上限（CLAUDE.md：校验类型 + 限制大小）
+export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 上传大小上限（CLAUDE.md：校验类型 + 限制大小）
 
 /** 解码 Blob/File → HTMLImageElement；Object URL 在本函数内创建并释放。 */
 function loadImageFromBlob(blob: Blob): Promise<HTMLImageElement> {

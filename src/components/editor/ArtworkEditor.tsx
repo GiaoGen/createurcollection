@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "motion/react";
 import Cropper from "react-easy-crop";
 import type { Area, Point } from "react-easy-crop";
 import { useCompilationStore } from "@/store/use-compilation-store";
-import { compressImage, dataUrlToBlob, storeImage, revokeObjectUrl, getImageUrl } from "@/lib/image/blobs";
+import { MAX_FILE_BYTES, compressImage, dataUrlToBlob, storeImage, revokeObjectUrl, getImageUrl } from "@/lib/image/blobs";
 import { cropImage } from "@/lib/image/crop";
 
 export function ArtworkEditor() {
@@ -24,6 +24,8 @@ export function ArtworkEditor() {
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(art.zoom);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 上传失败的轻量内联提示（如 >20MB 超限）；保持到下次上传/换面，不弹 Toast。
+  const [fileError, setFileError] = useState<string | null>(null);
 
   // 裁剪源：优先本地未提交预览；否则回落到当前面的会话源（已提交图）。
   const src = pendingUrl ?? sessionUrl;
@@ -53,10 +55,21 @@ export function ArtworkEditor() {
       }
       setCrop({ x: 0, y: 0 });
       setZoom(committed.zoom);
+      setFileError(null); // 换面时清掉上一面的上传错误提示
     });
     if (!id) return () => { cancelled = true; };
     getImageUrl(id).then((url) => {
       if (cancelled) {
+        if (url) revokeObjectUrl(url);
+        return;
+      }
+      // 竞态守卫：resolve 时校验该面已提交的 imageId 仍等于请求的 id——reset 会将其置 null、
+      // 期间若已提交新图则换成新 id，两种情况都丢弃迟到的旧图 URL（revoke），
+      // 避免占位被已删旧图复活。applyCrop 不换面、不重跑本 effect，不受影响。
+      const currentId = useCompilationStore.getState().project[
+        targetFace === "front" ? "frontCover" : targetFace === "back" ? "backCover" : "discArtwork"
+      ].imageId;
+      if (currentId !== id) {
         if (url) revokeObjectUrl(url);
         return;
       }
@@ -80,6 +93,13 @@ export function ArtworkEditor() {
   const onFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]; if (!f) return;
     const targetFace = face;
+    setFileError(null); // 清理上次的错误提示
+    // 超限文件直接提示，不再走解码/压缩（compressImage 内同样校验，双保险）。
+    if (f.size > MAX_FILE_BYTES) {
+      setFileError("文件过大（>20MB），请压缩后重试");
+      e.target.value = ""; // 重置 input，允许再次选择同一文件
+      return;
+    }
     try {
       const { blob } = await compressImage(f); // 校验类型 + 压缩（最长边 ≤2048）
       if (currentFaceRef.current !== targetFace) return; // 上传期间切换了面：丢弃本次结果
@@ -93,6 +113,8 @@ export function ArtworkEditor() {
       setArtwork(targetFace, { sourceName: f.name, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
     } catch {
       // 非图片/解码失败：不进入预览，保持现状（不抛错打断编辑）。
+    } finally {
+      e.target.value = ""; // 重置 input，保证再次选择同一文件也能触发 onChange
     }
   }, [face, setArtwork]);
 
@@ -125,6 +147,7 @@ export function ArtworkEditor() {
     }
     setCrop({ x: 0, y: 0 });
     setZoom(1);
+    setFileError(null);
     setArtwork(face, { sourceName: null, imageId: null, crop: { x: 0, y: 0, width: 0, height: 0 }, zoom: 1, rotation: 0 });
   }, [face, setArtwork]);
 
@@ -167,6 +190,19 @@ export function ArtworkEditor() {
           )}
         </AnimatePresence>
       </div>
+      <AnimatePresence>
+        {fileError && (
+          <motion.p
+            key="file-error"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } }}
+            exit={{ opacity: 0, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } }}
+            className="text-xs text-[var(--muted)]"
+          >
+            {fileError}
+          </motion.p>
+        )}
+      </AnimatePresence>
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
       {src && (
         <>
