@@ -8,7 +8,7 @@ import type {
   FilterId,
   SpineStyle,
 } from "@/types/compilation";
-import { getStoredImage } from "@/store/db";
+import { deleteStoredImage, getStoredImage } from "@/store/db";
 import { storeImage } from "@/lib/image/blobs";
 import { createId } from "@/lib/storage";
 
@@ -170,6 +170,29 @@ function artworkRef(project: CompilationProject, face: FaceKey): ArtworkState {
   return face === "front" ? project.frontCover : face === "back" ? project.backCover : project.discArtwork;
 }
 
+/**
+ * 把备份导入的图片 blob 重存到 storedImages 并回写 face.imageId（JSON/ZIP 两路径共用）。
+ * storeImage 解码失败时回退 w=h=0（不可渲染）→ 置空 imageId 并删除刚落库的孤儿，
+ * 防止 0 字节/破图永久滞留 storedImages（T17）。单张损坏只影响该面，不阻塞整体导入。
+ */
+async function attachArtworkBlob(
+  project: CompilationProject,
+  face: FaceKey,
+  blob: Blob
+): Promise<void> {
+  try {
+    const stored = await storeImage(blob);
+    if (stored.width === 0 || stored.height === 0) {
+      await deleteStoredImage(stored.id); // 解码失败 = 不可渲染，清掉刚落库的孤儿
+      artworkRef(project, face).imageId = null;
+    } else {
+      artworkRef(project, face).imageId = stored.id;
+    }
+  } catch {
+    artworkRef(project, face).imageId = null; // 单张损坏不阻塞整体导入
+  }
+}
+
 /** 导出 JSON（.album.json）：project 元数据 + 三面内嵌 base64 图（无图该项省略）。 */
 export async function exportAlbumJson(
   project: CompilationProject
@@ -232,16 +255,16 @@ async function importJson(blob: Blob): Promise<CompilationProject> {
   const images = isRecord(data.images) ? data.images : {};
   for (const face of ["front", "back", "disc"] as FaceKey[]) {
     const img = isRecord(images[face]) ? images[face] : null;
-    if (img && typeof img.data === "string") {
+    // 空 data / 非字符串 → 视为无此面图片直接置空（base64ToBlob("") 会产生 0 字节 Blob）。
+    if (img && typeof img.data === "string" && img.data.trim().length > 0) {
+      const mime = typeof img.mime === "string" && img.mime ? img.mime : "image/jpeg";
       try {
-        const mime = typeof img.mime === "string" && img.mime ? img.mime : "image/jpeg";
-        const stored = await storeImage(base64ToBlob(img.data, mime));
-        artworkRef(project, face).imageId = stored.id;
+        await attachArtworkBlob(project, face, base64ToBlob(img.data, mime));
       } catch {
-        artworkRef(project, face).imageId = null; // 单张图损坏不阻塞整体导入
+        artworkRef(project, face).imageId = null; // base64 非法也视为单张损坏，不阻塞整体导入
       }
     } else {
-      artworkRef(project, face).imageId = null; // 备份无此面图片 → 置空，不留指向旧库的失效 imageId
+      artworkRef(project, face).imageId = null; // 备份无此面图片/数据为空 → 置空，不留失效 imageId
     }
   }
   return project;
@@ -271,10 +294,10 @@ async function importZip(blob: Blob): Promise<CompilationProject> {
         const data = await imgEntry.async("arraybuffer");
         const dot = imgEntry.name.lastIndexOf(".");
         const ext = dot >= 0 ? imgEntry.name.slice(dot + 1).toLowerCase() : "";
-        const stored = await storeImage(new Blob([data], { type: mimeFromExt(ext) }));
-        artworkRef(project, face).imageId = stored.id;
+        // 0 字节/空 arraybuffer → storeImage 解码失败 → w=h=0 → attachArtworkBlob 清孤儿置空。
+        await attachArtworkBlob(project, face, new Blob([data], { type: mimeFromExt(ext) }));
       } catch {
-        artworkRef(project, face).imageId = null;
+        artworkRef(project, face).imageId = null; // 该面图片损坏不阻塞整体导入
       }
     } else {
       artworkRef(project, face).imageId = null;

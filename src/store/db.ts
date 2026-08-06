@@ -48,3 +48,8 @@ export async function saveStoredImage(img: StoredImage): Promise<void> {
 export async function getStoredImage(id: string): Promise<StoredImage | undefined> {
   return db.storedImages.get(id);
 }
+
+/** 删除 storedImages 中某条（导入时清理解码失败的孤儿图片，T17）。 */
+export async function deleteStoredImage(id: string): Promise<void> {
+  await db.storedImages.delete(id);
+}
