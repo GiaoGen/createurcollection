@@ -1,6 +1,7 @@
 export type FilterId =
-  | "original" | "mono" | "contrast" | "faded" | "cold"
-  | "deepblack" | "duotone" | "grain" | "softblur" | "invert";
+  | "original" | "ascii" | "halftone" | "pixel" | "oilpainting"
+  | "dither" | "comic" | "risograph" | "vhs" | "glitch"
+  | "sketch" | "collage" | "filmnegative";
 
 export type SpineStyle = "catalog" | "obi" | "vertical" | "transparent";
 

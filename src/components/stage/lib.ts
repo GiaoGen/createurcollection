@@ -3,6 +3,7 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import type { FilterId, SpineStyle } from "@/types/compilation";
+import { bakeFilteredUrl } from "@/lib/image/art-filters";
 
 /* ------------------------------------------------------------------ *
  * WebGL capability + tiny math helpers
@@ -23,22 +24,26 @@ export function clamp(v: number, min: number, max: number): number {
 }
 
 /* ------------------------------------------------------------------ *
- * Inline CSS-filter stand-in.
- * Task 9 (src/lib/filters.ts FILTERS/drawFiltered) replaces this map;
- * the texture is driven purely by imageUrl, so the swap is safe.
+ * CSS-filter approximations — used ONLY by the no-WebGL StageFallback.
+ * The real art filters are the Canvas 2D pixel pipeline in
+ * src/lib/image/art-filters.ts (Task 9); these are best-effort stand-ins
+ * so the CSS fallback still hints at the applied filter.
  * ------------------------------------------------------------------ */
 
 export const INLINE_FILTER_CSS: Record<FilterId, string> = {
   original: "none",
-  mono: "grayscale(1)",
-  contrast: "contrast(1.2)",
-  faded: "contrast(0.9) saturate(0.8)",
-  cold: "sepia(0.25) hue-rotate(165deg) saturate(0.9)",
-  deepblack: "contrast(1.4) brightness(0.7)",
-  duotone: "grayscale(1) contrast(1.15)",
-  grain: "contrast(0.95)",
-  softblur: "blur(1.5px)",
-  invert: "invert(1)",
+  ascii: "contrast(1.1) grayscale(1)",
+  halftone: "contrast(1.35) grayscale(1)",
+  pixel: "contrast(1.2)",
+  oilpainting: "contrast(1.25) saturate(1.1)",
+  dither: "contrast(1.5) grayscale(1)",
+  comic: "contrast(1.5) saturate(1.45)",
+  risograph: "contrast(1.1) saturate(0.85) hue-rotate(200deg)",
+  vhs: "contrast(1.05) saturate(0.9)",
+  glitch: "contrast(1.05) saturate(1.1) hue-rotate(12deg)",
+  sketch: "contrast(1.7) grayscale(1)",
+  collage: "contrast(1.05)",
+  filmnegative: "invert(1) contrast(1.05)",
 };
 
 /* ------------------------------------------------------------------ *
@@ -217,7 +222,20 @@ function makeTrayTexture(): THREE.CanvasTexture {
  * (URLs change often and need explicit dispose to avoid GPU leaks).
  * ------------------------------------------------------------------ */
 
-/** Front/back/disc artwork: CanvasTexture that repaints when the image loads. */
+/**
+ * Front/back/disc artwork texture. The source imageUrl is baked through the
+ * art-filter pipeline (bakeFilteredUrl) and composited by the existing
+ * cover/disc painters — so the filter is baked into the artwork only, while
+ * the square crop, vignette, disc vinyl + label and flipX mirror keep working.
+ *
+ * The texture is recreated per input change (matching the brief's
+ * "dispose + rebuild" contract) and disposed by the cleanup below.
+ */
+/** Per-texture bake timer id — plain module Map (not React state/ref), so the
+ *  useMemo factory can schedule a debounced bake and the dispose effect can
+ *  cancel it when a newer filter/image supersedes the texture first. */
+const texTimers = new WeakMap<THREE.CanvasTexture, number>();
+
 export function useArtworkTexture(
   url: string | null,
   filter: FilterId,
@@ -232,26 +250,56 @@ export function useArtworkTexture(
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
+
     if (url) {
-      const img = new Image();
-      img.decoding = "async";
-      img.onload = () => {
-        ctx.clearRect(0, 0, TEX, TEX);
-        if (mode === "cover") paintCover(ctx, img, filter, flipX);
-        else paintDisc(ctx, img, filter);
-        t.needsUpdate = true;
-      };
-      img.onerror = () => {
-        ctx.clearRect(0, 0, TEX, TEX);
-        paintPlaceholder(ctx, "NO COVER");
-        t.needsUpdate = true;
-      };
-      img.src = url;
+      // Debounced (150ms) bake through the art-filter pipeline. The filtered
+      // imageUrl is composited by paintCover/paintDisc so the square crop,
+      // vignette, disc vinyl + label and flipX mirror all keep working.
+      // Heavy filters (oilpainting/vhs/glitch/collage) stay responsive when
+      // the user clicks through filters quickly: the pending timer is cleared
+      // by the dispose effect below if this texture is superseded first.
+      const timer = window.setTimeout(() => {
+        bakeFilteredUrl(url, filter, TEX)
+          .then((baked) => {
+            const img = new Image();
+            img.decoding = "async";
+            img.onload = () => {
+              ctx.clearRect(0, 0, TEX, TEX);
+              if (mode === "cover") paintCover(ctx, img, "original", flipX);
+              else paintDisc(ctx, img, "original");
+              t.needsUpdate = true;
+            };
+            img.onerror = () => {
+              ctx.clearRect(0, 0, TEX, TEX);
+              paintPlaceholder(ctx, "NO COVER");
+              t.needsUpdate = true;
+            };
+            img.src = baked;
+          })
+          .catch(() => {
+            ctx.clearRect(0, 0, TEX, TEX);
+            paintPlaceholder(ctx, "NO COVER");
+            t.needsUpdate = true;
+          });
+      }, 150);
+      texTimers.set(t, timer);
     }
+
     return t;
   }, [url, filter, mode, flipX]);
 
-  useEffect(() => () => tex.dispose(), [tex]);
+  useEffect(
+    () => () => {
+      const timer = texTimers.get(tex);
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        texTimers.delete(tex);
+      }
+      tex.dispose();
+    },
+    [tex]
+  );
+
   return tex;
 }
 
