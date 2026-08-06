@@ -3,3 +3,5 @@ allowBuilds:
   unrs-resolver: false
 minimumReleaseAgeExclude:
   - '@react-three/drei@10.7.8'
+overrides:
+  '@types/three': 0.185.1

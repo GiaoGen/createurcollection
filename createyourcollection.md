@@ -137,9 +137,9 @@
 
 ### 7. 本地保存
 
-精选集状态保存到 `localStorage`，刷新页面后恢复。
+精选集数据（含图片 Blob）保存到 **IndexedDB**（主要存储），刷新/重启后恢复，可**长期缓存**（`navigator.storage.persist()` 申请持久存储，防浏览器在空间压力下驱逐）；`localStorage` 只存少量偏好（当前项目 ID、主题、上次编辑模式、是否显示新手引导、是否选择「记住登录」）。网易云登录 Cookie 属敏感凭证：默认存 `sessionStorage`，仅用户主动开启「记住登录」时才写入 IndexedDB（见 §三）。用户作品**不上传任何服务器**。
 
-三小时版本不做：
+MVP 版本不做：
 
 * 注册和登录
 * 云端数据库
@@ -149,95 +149,191 @@
 * 复杂权限系统
 * 正式商业音乐版权接入
 
-### 8. 导出
+### 8. 导出与备份
 
-提供一个简洁的 Export 按钮，将当前 CD 正面展示导出为 PNG。
+**宣传图导出**：提供简洁的 Export 按钮，将当前 CD 正面展示导出为 PNG。使用 `html-to-image` 将指定 DOM 节点转换为 PNG；3D Canvas 无法稳定导出时，用专门的二维 ExportCard 组件生成宣传图。
 
-可以使用 `html-to-image` 将指定 DOM 节点转换为 PNG；该库通过 SVG、Canvas 等浏览器能力生成图像。
-
-如果 3D Canvas 无法稳定直接导出，则使用专门的二维 ExportCard 组件生成宣传图，不要在导出功能上浪费大量时间。
+**项目备份（数据兜底）**：由于数据只存浏览器，必须提供备份能力——导出项目文件（`.album.json`，含项目元数据、曲目列表、图片设置与必要的图片数据），可重新导入恢复；可选 ZIP（`project.json` + `images/front.webp`、`back.webp`、`disc.webp`）。清浏览器数据或换设备时不会完全丢失作品。
 
 ---
 
-# 三、网易云音乐接入方案
+# 三、网易云音乐接入方案（2026-08-06 更新 · 纯前端 + 扫码登录）
 
-## 现实情况
+## 最终架构
 
-目前不要把网易云音乐逆向接口作为项目核心依赖。
-
-广泛使用的 `Binaryify/NeteaseCloudMusicApi` 已在 2024 年归档，项目说明中提到因版权停止维护。后续社区版本仍然存在，但属于第三方逆向接口，并不是稳定的官方开放能力。
-
-网易云历史上存在外链播放器：
+**纯前端，无任何自有后端**：不写 Next.js Route Handler / Server Actions、不建数据库/Supabase、不服务端代理、不服务端 Session、不自建登录系统、不自建网易云 API 服务、无云端项目存储。浏览器直接调用第三方网易云 API——第三方 API 是外部依赖，不属于本项目后端。
 
 ```text
-https://music.163.com/outchain/player?type=2&id=歌曲ID&auto=0
+浏览器(纯前端 Next.js)
+    ↓ 直接 fetch（无本服务代理）
+第三方网易云 API（公网可访问，需开启 CORS）
+    ↓
+网易云音乐
+
+扫码登录 → Cookie 保存在当前用户浏览器（默认 sessionStorage，可选 IndexedDB「记住登录」）
+→ 读取用户歌单与红心歌曲 → 携带 Cookie 获取播放地址 → HTMLAudioElement 网页内播放
 ```
 
-它可以通过 iframe 嵌入，但存在以下问题：
+## API 地址配置
 
-* 无法自由修改 iframe 内部样式
-* 无法稳定控制内部播放状态
-* 无法与自定义进度条完全同步
-* 部分歌曲可能因为版权无法站外播放
-* 服务策略可能发生变化
-* 跨域限制导致父页面不能直接读取播放器内部状态
+通过公开前端环境变量配置，**统一读取，禁止多处硬编码**：
 
-## 三小时版本采用的方案
+```env
+NEXT_PUBLIC_NETEASE_API_BASE_URL=https://example-api.com
+```
 
-建立统一的音乐来源适配层：
+所有网易云请求走统一客户端（`src/lib/netease/`），**不要在 React 组件中直接拼接 API 地址**：
+
+```text
+src/lib/netease/
+├─ client.ts      # 统一 fetch：Base URL 读取 + 超时 + CORS/网络错误归一 + Cookie 显式传递
+├─ auth.ts        # 扫码登录：qr/key、qr/create、qr/check 轮询、login/status 校验、登出
+├─ playlist.ts    # 用户歌单 / 红心歌曲 / 公开歌单
+├─ playback.ts    # 播放地址（/song/url/v1 优先，/song/url 回退）
+├─ normalize.ts   # 原始数据 → 应用 CompilationTrack / PlaybackResolution
+└─ types.ts       # 第三方 API 原始返回类型 + 应用模型
+```
+
+## 扫码登录流程
+
+1. **获取二维码 Key**：`/login/qr/key?timestamp={Date.now()}`
+2. **创建二维码**：`/login/qr/create?key={key}&qrimg=true&timestamp={Date.now()}`；**优先使用 API 返回的 Base64 二维码图片**，无图则按二维码内容在前端生成。
+3. **轮询登录状态**：约每 2 秒 `/login/qr/check?key={key}&timestamp={Date.now()}&noCookie=true`；**每次请求必须带新的 timestamp**，避免浏览器/CDN/第三方 API 缓存轮询结果。状态码：`800` 过期（显示重新生成入口）、`801` 等待扫码、`802` 已扫码待确认、`803` 成功（提取 `cookie`，**立即停止轮询**）。
+4. 组件卸载、弹窗关闭或登录成功后必须**清除轮询定时器**；所有登录相关请求必须可取消（AbortController）。
+5. **验证登录**：登录成功后调 `/login/status` 并显式携带 Cookie；若接口无法识别，再请求账号信息接口验证。**不要只因为本地存在 Cookie 就认为仍登录**。
+
+## Cookie 保存方式（敏感登录凭证）
+
+Cookie 属于敏感凭证：**不保存到 React 状态后到处传递，不写进项目 JSON**。默认策略：
+
+* **当前会话**：存 `sessionStorage`，关闭标签页/窗口后失效。
+* **记住登录**：只有用户主动开启「记住登录」时，才保存到 IndexedDB。
 
 ```ts
-interface MusicProvider {
-  search(query: string): Promise<TrackSearchResult[]>
-  resolve(input: string): Promise<TrackMetadata | null>
-  getPlayableSource(track: Track): Promise<PlayableSource | null>
+interface StoredNeteaseSession {
+  id: "netease-session";
+  cookie: string;
+  userId?: number;
+  nickname?: string;
+  avatarUrl?: string;
+  createdAt: number;
+  lastValidatedAt: number;
 }
 ```
 
-实现两个 Provider：
+**不保存**：手机号、密码、短信验证码、二维码 Key、完整 API 请求日志。**不把 Cookie 写入**：localStorage、URL、Console、错误日志、Analytics、导出的精选集文件。
 
-### DemoMusicProvider
+**登出必须清除**：sessionStorage 中的 Cookie、IndexedDB 中的网易云 Session、内存中的用户状态、缓存的私人歌单、当前播放地址。
 
-默认启用。
+## 跨域请求中的 Cookie 传递
 
-负责：
+不要依赖浏览器自动向第三方域名携带 Cookie；所有需登录的请求**显式携带**登录返回的 Cookie。优先 POST Body：
 
-* 内置演示歌曲
-* 本地 MP3 或合法测试音频播放
-* 完整支持自定义播放器
-* 确保网站不依赖外部接口也能运行
+```ts
+await fetch(`${apiBase}/user/playlist`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ uid, cookie, timestamp: Date.now() }),
+});
+```
 
-### NeteaseLinkProvider
+若目标 API 只支持 Query 参数，则 `const encodedCookie = encodeURIComponent(cookie)` 传入。**Cookie 处理逻辑集中在统一 Client**，页面组件不自行处理。
 
-实验性功能。
+## 登录后读取用户音乐
 
-第一版只负责：
+登录并取得用户 ID 后：
 
-* 接收网易云歌曲分享链接
-* 从链接中解析歌曲 ID
-* 允许用户手动补充歌曲名和艺术家
-* 保存原始网易云链接
-* 提供“在网易云打开”
-* 可选显示网易云外链 iframe
+* **用户歌单**：`/user/playlist?uid={uid}`，显示用户创建的歌单与收藏的歌单、名称、封面、曲目数量；点击歌单读取全部歌曲。
+* **红心歌曲**：读取用户喜欢歌曲 ID 列表 → 批量获取歌曲详情，界面作为「我喜欢的音乐」。
+* **歌单导入**：可打开自己的歌单，**单选/多选/全选**歌曲加入当前精选集；只保存歌曲元数据与网易云歌曲 ID。
 
-不要：
+## 歌曲播放
 
-* 绕过会员限制
-* 使用“解灰”接口
-* 抓取受版权保护的完整音频
-* 将用户网易云 Cookie 暴露到前端
-* 假装第三方接口是网易云官方 API
+```ts
+interface CompilationTrack {
+  id: string;
+  provider: "netease";
+  providerTrackId: number;      // 网易云歌曲 ID
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;
+  durationMs?: number;
+  sourcePlaylistId?: number;    // 来源歌单 ID
+  externalUrl?: string;         // 「在网易云打开」链接
+}
+```
 
-## 后续正式产品方案
+**不持久化播放 URL**。播放流程：用户点击播放 → 读取当前 Cookie → 根据歌曲 ID 请求最新播放地址 → 检查 URL 与权限 → 设置 `audio.src` → 调用 `play()`。
 
-音乐数据层必须保持 Provider 化，以便未来接入：
+* **优先 `/song/url/v1`**；若该接口失败或返回结构不兼容，**回退 `/song/url`**。不要假定某端点在所有第三方实例可用。
+* 所有 API 响应经 normalize 层转统一格式：
 
-* 正式授权的音乐服务
-* 用户自行上传的音频
-* Apple Music MusicKit
-* 其他提供官方 Web SDK 的平台
+```ts
+interface PlaybackResolution {
+  url: string | null;
+  durationMs?: number;
+  bitrate?: number;
+  level?: string;
+  availability: "playable" | "trial" | "vip-required" | "unavailable";
+}
+```
 
-Apple Music 的 MusicKit 官方支持网页端流媒体播放和自定义播放器，但需要开发者令牌及用户授权，可以作为未来正式接入方向。
+## 权限边界
+
+扫码登录不等于所有歌曲都能播放。登录后只能使用**当前账号原本拥有的权限**：免费歌曲、账号会员权限、已购买数字专辑、账号允许播放的云盘音乐。仍可能无法播放：已下架、地区限制、账号无权付费歌曲、URL 获取失败、第三方 API 暂时失效。
+
+不可播放时：**保留歌曲在精选集中**，显示「当前账号暂无播放权限」，**自动寻找下一首可播放歌曲**，提供「在网易云音乐打开」，**不让整个播放器报错或停止工作**。
+
+## 播放器状态
+
+使用**一个全局 HTMLAudioElement**，不为每首歌新建 `<audio>`。
+
+```ts
+interface PlayerState {
+  currentTrackId: string | null;
+  playing: boolean;
+  loading: boolean;      // 请求播放 URL 期间
+  currentTime: number;
+  duration: number;
+  volume: number;
+  error: string | null;  // 受限/失败原因，用于 UI
+}
+```
+
+监听事件：`loadstart` / `canplay` / `playing` / `pause` / `timeupdate` / `ended` / `error` / `stalled` / `waiting`。与 CD 动效联动：`loading` → 唱片轻微等待状态；`playing` → 唱片平滑加速并持续旋转；`pause` → 平滑减速；`ended` → 自动切换下一首；`error` → 唱片停止并尝试下一首。
+
+## 本地数据存储
+
+* **IndexedDB**：用户创建的所有精选集、曲目、图片 Blob、图片处理参数、用户主动选择记住的网易云 Session、缓存的歌单与歌曲元数据。
+* **sessionStorage**：默认保存当前网易云 Cookie、当前登录用户 ID、当前标签页的临时播放状态。
+* **localStorage**：只保存深浅主题、最近打开的精选集 ID、界面偏好、是否选择「记住登录」。**不放大图片、完整精选集或网易云 Cookie 进 localStorage**。
+
+## 缓存规则
+
+可缓存：用户歌单列表、歌单详情、歌曲元数据、搜索结果、专辑封面 URL。**不长期缓存**：二维码状态、二维码 Key、登录检查结果、歌曲播放 URL（播放 URL 只保存在内存，切歌/页面刷新/URL 失效后重新获取）。
+
+## 错误处理
+
+需单独处理：第三方 API 未配置、API 不支持 CORS、二维码生成失败、二维码过期、用户取消登录、Cookie 已过期、登录状态失效、私人歌单读取失败、播放地址为空、VIP 权限不足、音频跨域错误、API 限流、网络断开。
+
+**Cookie 失效时**：停止继续发送无效 Cookie → 清理本地 Session → **保留用户已经创建的精选集** → 提示重新扫码登录 → **不删除已经导入的歌曲**。
+
+第三方 API 不可用时，本地精选集编辑功能仍必须正常运行。
+
+## 安全提示（登录界面必显）
+
+```text
+本功能通过第三方网易云音乐接口实现。
+登录凭证仅保存在当前浏览器中。
+请仅在你信任的 API 服务上使用扫码登录。
+```
+
+不声称这是网易云官方授权登录；不隐藏第三方 API 的性质。
+
+## Provider 边界
+
+`MusicProvider` 抽象不变（`lib/music/provider.ts`）。`NeteaseProvider` 为纯前端实现，内部调用 `NeteaseClient`（含登录态与 Cookie 传递）；`getPlayableSource(track)` 按 `track.provider` 分发（netease → 携带 Cookie 请求播放地址；demo → 合成 WAV）。`PlaybackResolution.availability !== "playable"` 即受限/不可播，播放器进入受限状态并如实提示。
 
 ---
 
@@ -264,37 +360,95 @@ Next.js App Router 原生支持布局、路由、Server/Client Components 和 Su
 
 ## 状态管理
 
-使用 Zustand 管理编辑器状态：
+使用 Zustand 管理编辑器状态。建议数据结构：
 
 ```ts
 type CompilationProject = {
   id: string
   title: string
-  subtitle: string
-  curator: string
-  year: string
-  description: string
+  subtitle?: string
+  creator?: string
+  description?: string
+  year?: string
 
-  frontCover: ArtworkState
-  backCover: ArtworkState
+  frontArtwork: ArtworkState
+  backArtwork: ArtworkState
   discArtwork: ArtworkState
 
-  spineStyle: SpineStyle
-  theme: "light" | "dark"
+  spineStyle: string
+  tracks: CompilationTrack[]
 
-  tracks: Track[]
-  activeTrackId: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+type CompilationTrack = {
+  id: string
+  provider: "demo" | "netease"
+  providerTrackId?: number      // 网易云歌曲 ID（netease 源）
+  title: string
+  artist: string
+  album?: string
+  artworkUrl?: string
+  durationMs?: number           // 毫秒
+  sourcePlaylistId?: number     // 来源歌单 ID
+  externalUrl?: string          // 「在网易云打开」链接
+}
+
+// 图片不以超长 Base64 内嵌进项目 JSON；imageId 引用 IndexedDB 中单独存储的 Blob。
+type ArtworkState = {
+  imageId?: string
+  cropX: number
+  cropY: number
+  zoom: number
+  rotation: number
+  filter: string
+}
+
+type StoredImage = {
+  id: string
+  blob: Blob
+  width: number
+  height: number
+  createdAt: number
+}
+
+type PlayerState = {
+  currentTrackId: string | null
+  playing: boolean
+  loading: boolean              // 请求播放 URL 期间
+  currentTime: number
+  duration: number
+  volume: number
+  error: string | null          // 受限/失败原因
+}
+
+type PlaybackResolution = {
+  url: string | null
+  durationMs?: number
+  bitrate?: number
+  level?: string
+  availability: "playable" | "trial" | "vip-required" | "unavailable"
+}
+
+// 网易云「记住登录」Session：仅用户主动开启时才写入 IndexedDB；默认 Cookie 存 sessionStorage（见 §三）
+type StoredNeteaseSession = {
+  id: "netease-session"
+  cookie: string
+  userId?: number
+  nickname?: string
+  avatarUrl?: string
+  createdAt: number
+  lastValidatedAt: number
 }
 ```
 
-Store 分为：
+Store 分为 Project / Editor / Player / 3D presentation 四个 slice。存储策略：
 
-* Project state
-* Editor state
-* Player state
-* 3D presentation state
+* **IndexedDB（主要，可用 Dexie 简化）**：所有精选集、封面/背面/盘面图片 Blob、压缩后图片、曲目列表、完整项目数据。
+* **localStorage（仅偏好）**：当前项目 ID、深浅主题、上次打开的编辑模式、是否显示新手引导。
 
-使用 Zustand persist middleware 写入 localStorage。Zustand 提供基于 Hooks 的轻量状态管理，并支持持久化等中间件。
+自动保存用防抖：用户停止编辑约 500–1000ms 后将项目写入 IndexedDB，不要每次输入字符都立即高成本写入。
 
 ## 动效
 
@@ -835,33 +989,49 @@ src/
 │  │  ├─ ArtworkEditor.tsx
 │  │  ├─ FilterSelector.tsx
 │  │  ├─ SpineEditor.tsx
-│  │  └─ TrackEditor.tsx
+│  │  ├─ TrackEditor.tsx
+│  │  └─ NeteasePicker.tsx       # 网易云登录/歌单/红心/搜索 添加（T19，含登录 UI）
 │  │
 │  ├─ player/
 │  │  ├─ Player.tsx
 │  │  ├─ Progress.tsx
 │  │  └─ PlayingIndicator.tsx
 │  │
-│  └─ export/
-│     └─ ExportCard.tsx
+│  ├─ export/
+│  │  └─ ExportCard.tsx          # 宣传图导出（T12）
+│  │
+│  └─ projects/
+│     └─ ProjectManager.tsx      # 本地多项目列表/新建/复制/删除（T16）
 │
 ├─ lib/
 │  ├─ image/
 │  │  ├─ crop.ts
-│  │  ├─ filters.ts
-│  │  └─ resize.ts
+│  │  ├─ art-filters.ts
+│  │  ├─ resize.ts               # 含 WebP/JPEG 压缩、最长边 1600–2048（T15）
+│  │  └─ blobs.ts                # Object URL 创建/释放管理（T15）
 │  │
 │  ├─ music/
 │  │  ├─ types.ts
 │  │  ├─ provider.ts
 │  │  ├─ demo-provider.ts
-│  │  └─ netease-link-provider.ts
+│  │  └─ netease-provider.ts     # 纯前端实现，内部调用 NeteaseClient（T18）
+│  │
+│  ├─ netease/                   # 统一网易云客户端（T18）
+│  │  ├─ client.ts               # 统一 fetch + Cookie 显式传递 + 超时/CORS 错误归一
+│  │  ├─ auth.ts                 # 扫码登录：qr/key · qr/create · qr/check 轮询 · status 校验 · 登出
+│  │  ├─ playlist.ts             # 用户歌单 / 红心歌曲 / 公开歌单
+│  │  ├─ playback.ts             # 播放地址（/song/url/v1 优先，/song/url 回退）
+│  │  ├─ normalize.ts            # 原始数据 → CompilationTrack / PlaybackResolution
+│  │  └─ types.ts
 │  │
 │  ├─ export-image.ts
+│  ├─ backup.ts                  # JSON/ZIP 项目备份导出/导入（T17）
 │  └─ storage.ts
 │
 ├─ store/
-│  └─ use-compilation-store.ts
+│  ├─ db.ts                      # Dexie：projects + images 表（T15）
+│  ├─ use-compilation-store.ts
+│  └─ use-projects-store.ts      # 多项目列表/当前项目（T16）
 │
 ├─ data/
 │  └─ demo-project.ts
@@ -1006,7 +1176,7 @@ src/
 * 不硬编码不可维护的重复数据
 * 音乐接口使用 Provider 抽象
 * 图片 Object URL 会被正确释放
-* 不在前端保存第三方账号 Cookie
+* 网易云 Cookie 只存 sessionStorage（可选 IndexedDB），不写入 localStorage / URL / Console / 错误日志 / 导出文件
 * 不添加无法工作的假按钮
 * 构建通过
 * 无持续 Console Error
@@ -1017,18 +1187,14 @@ src/
 
 三小时内不要开发：
 
-* 登录注册
-* Supabase
-* 社区广场
-* 点赞评论
-* 关注系统
-* 多人协作
+* 任何自有后端：Next.js Route Handler / Server Actions / 数据库 / Supabase / 服务端代理 / 服务端文件存储 / 自建网易云 API 服务 / 服务端 Cookie / 服务端 Session / 云端项目存储
+* 注册登录、自建账号系统
+* 网易云账号登录除「第三方 API 扫码登录」外的其他方式（手机号/密码/短信）、登录态同步到服务端
+* 会员歌曲解灰与绕权（`ENABLE_GENERAL_UNBLOCK`）
+* 批量抓取/下载/外链传播受版权音频
+* 社区广场、点赞评论、关注系统、多人协作
 * AI 自动生成封面
-* 歌词同步
-* 音频频谱分析
-* 完整网易云账号登录
-* 会员音乐解析
-* 服务端音频代理
+* 歌词同步、音频频谱分析
 * 复杂 WebGL 后处理
 * 多页面营销官网
 
@@ -1049,12 +1215,12 @@ src/
 5. 所有按钮必须真实可用，不创建装饰性假按钮。
 6. 不使用暖黄色、紫蓝渐变球或常见 AI 网站视觉。
 7. 不使用多层 Card 和圆角容器嵌套。
-8. 不直接接入存在版权风险的网易云音频解析接口。
-9. 网易云功能只实现分享链接解析和可替换 Provider 边界。
+8. 网易云为**纯前端集成 + 第三方 API 扫码登录**：浏览器直接调用第三方 API（Base URL 用 `NEXT_PUBLIC_NETEASE_API_BASE_URL`，统一走 `src/lib/netease/` 客户端，不硬编码域名）；**不开发本项目后端、不代理、不自建登录系统**。扫码登录（`/login/qr/key` → `/login/qr/create` → `/login/qr/check` 轮询每次带新 timestamp → `/login/status` 校验），Cookie 默认存 `sessionStorage`、仅用户主动开启「记住登录」时存 IndexedDB（不写 localStorage/URL/导出文件）；读取用户歌单与红心歌曲、公开歌单导入（链接/纯 ID 解析）+ 搜索 + 单选/多选/全选添加；经 `/song/url/v1`（失败回退 `/song/url`）携带 Cookie 网页播放，播放 URL 不持久化；无播放权限保留歌曲并提示、自动切下一首、提供「在网易云打开」，不做绕过、不开解灰。
+9. 所有项目数据（含图片 Blob）存 **IndexedDB**，localStorage 只存少量偏好；自动保存防抖（500–1000ms）；提供项目备份导出/导入；第三方 API 不可用时本地编辑与离线功能仍完整可用；`navigator.storage.persist()` 申请持久存储以长期缓存用户作品。
 10. 使用 DemoMusicProvider 保证项目在无 API Key、无外部服务时仍能完整运行。
 11. 所有高频动画避免 React setState。
 12. 移动端必须提供真实可操作的布局，而不是缩小桌面版。
-13. 实现 localStorage 持久化。
+13. 实现本地多项目管理（创建/列表/打开/重命名/删除，自动保存）。
 14. 完成后运行 lint 和 build。
 15. 修复所有由本次修改引入的 TypeScript、构建和运行错误。
 16. 最终汇报：
