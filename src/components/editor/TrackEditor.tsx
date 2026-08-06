@@ -1,18 +1,13 @@
 "use client";
 import { Plus, GripVertical, Trash2 } from "lucide-react";
 import { useCompilationStore } from "@/store/use-compilation-store";
-import { createId } from "@/lib/storage";
-
-function formatTime(d: number): string {
-  if (d <= 0) return "--:--";
-  const m = Math.floor(d / 60);
-  const s = String(d % 60).padStart(2, "0");
-  return `${m}:${s}`;
-}
+import { createId, formatTime } from "@/lib/storage";
+import { PlayingIndicator } from "@/components/player/PlayingIndicator";
 
 export function TrackEditor() {
   const tracks = useCompilationStore((s) => s.project.tracks);
   const activeTrackId = useCompilationStore((s) => s.project.activeTrackId);
+  const isPlaying = useCompilationStore((s) => s.player.isPlaying);
   // 动作经 getState 取稳定引用，避免每帧重渲染；数据订阅如上两行。
   const { updateTrack, removeTrack, addTrack, setActiveTrack, reorderTracks } = useCompilationStore.getState();
 
@@ -52,7 +47,13 @@ export function TrackEditor() {
               aria-label="拖动排序">
               <GripVertical size={14} />
             </button>
-            <span className="font-mono-num text-xs text-[var(--muted)] w-6">{String(i + 1).padStart(2, "0")}</span>
+            <span className="w-6 inline-flex items-center justify-center shrink-0">
+              {t.id === activeTrackId && isPlaying ? (
+                <PlayingIndicator playing />
+              ) : (
+                <span className="font-mono-num text-xs text-[var(--muted)]">{String(i + 1).padStart(2, "0")}</span>
+              )}
+            </span>
             <div className="flex-1 min-w-0">
               <input
                 value={t.title}
