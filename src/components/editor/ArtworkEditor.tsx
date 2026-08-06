@@ -24,13 +24,19 @@ export function ArtworkEditor() {
     }
   }, [face, art.imageUrl]);
 
+  // 追踪当前面，供异步操作（上传/裁剪）完成后校验：期间切换了面则丢弃结果，避免写入错误的面
+  const currentFaceRef = useRef(face);
+  useEffect(() => { currentFaceRef.current = face; }, [face]);
+
   const onFile = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]; if (!f) return;
+    const targetFace = face;
     const dataUrl = await fileToDataUrl(f);
     const resized = await resizeImageToMax(dataUrl);
+    if (currentFaceRef.current !== targetFace) return; // 上传期间切换了面：丢弃本次结果
     setSrc(resized);              // 预览源（未裁剪）
-    // 新图重置裁剪参数，裁剪确认后写 imageUrl
-    setArtwork(face, { sourceName: f.name, crop: { x: 0, y: 0, width: 1, height: 1 }, zoom: 1, rotation: 0 });
+    // 新图重置裁剪参数（0-100%），裁剪确认后写 imageUrl
+    setArtwork(targetFace, { sourceName: f.name, crop: { x: 0, y: 0, width: 100, height: 100 }, zoom: 1, rotation: 0 });
   }, [face, setArtwork]);
 
   const onCropComplete = useCallback((crop: CropArea) => {
@@ -39,15 +45,17 @@ export function ArtworkEditor() {
 
   const applyCrop = useCallback(async () => {
     if (!src) return;
+    const targetFace = face;
     const out = await cropImage(src, art.crop, art.zoom, art.rotation);
+    if (currentFaceRef.current !== targetFace) return; // 处理期间切换了面：不写入错误的面
     const old = art.imageUrl;
-    setArtwork(face, { imageUrl: out });
+    setArtwork(targetFace, { imageUrl: out });
     if (old && old.startsWith("blob:")) URL.revokeObjectURL(old); // 释放旧 URL
   }, [src, art, face, setArtwork]);
 
   const reset = useCallback(() => {
     setSrc(null);
-    setArtwork(face, { sourceName: null, imageUrl: null, crop: { x: 0, y: 0, width: 1, height: 1 }, zoom: 1, rotation: 0 });
+    setArtwork(face, { sourceName: null, imageUrl: null, crop: { x: 0, y: 0, width: 100, height: 100 }, zoom: 1, rotation: 0 });
   }, [face, setArtwork]);
 
   return (
@@ -98,7 +106,7 @@ export function ArtworkEditor() {
               <input
                 type="range"
                 min={1}
-                max={4}
+                max={3}
                 step={0.01}
                 value={art.zoom}
                 onChange={(e) => setArtwork(face, { zoom: Number(e.target.value) })}
