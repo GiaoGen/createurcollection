@@ -29,6 +29,15 @@ class CYCDatabase extends Dexie {
       .upgrade(() => {
         // 空迁移：仅新增 sessions 表，不触碰既有 projects / storedImages 数据。
       });
+    // v3 为 sessions 表新增 loggedInAt 索引：多账号「记住登录」时取最近登录会话。
+    // 空迁移即可，既有行由 Dexie 自动重建索引；v2 声明保持原样。
+    this.version(3)
+      .stores({
+        sessions: "userId, loggedInAt",
+      })
+      .upgrade(() => {
+        // 空迁移：仅新增索引，不触碰既有数据。
+      });
   }
 }
 
@@ -70,9 +79,9 @@ export async function saveNeteaseSession(session: StoredNeteaseSession): Promise
   await db.sessions.put(session);
 }
 
-/** 读取网易云记住登录会话（单用户，取首条；无则 undefined）。 */
+/** 读取网易云记住登录会话（取 loggedInAt 最近的「记住登录」会话；无则 undefined）。 */
 export async function getNeteaseSession(): Promise<StoredNeteaseSession | undefined> {
-  return db.sessions.toCollection().first();
+  return db.sessions.orderBy("loggedInAt").last();
 }
 
 /** 删除网易云记住登录会话（登出/清会话时调用）。 */

@@ -3,7 +3,7 @@
 
 import { NeteaseError, type NeteaseApiResponse } from "./types";
 
-const BASE = (process.env.NEXT_PUBLIC_NETEASE_API_BASE_URL ?? "").trim();
+const BASE = (process.env.NEXT_PUBLIC_NETEASE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 
 /** 请求超时（毫秒）。fetch 外层 AbortController 兜底。 */
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -57,6 +57,7 @@ export class NeteaseClient {
       throw new NeteaseError("network", "网易云 API 未配置（NEXT_PUBLIC_NETEASE_API_BASE_URL 为空）");
     }
     const { params, cookie, method = "GET", signal, skipCodeCheck = false } = opts;
+    if (signal?.aborted) throw new NeteaseError("network", "请求已取消");
 
     const query = this.buildQuery(params);
     const cacheKey = `${method}:${path}?${query}`;

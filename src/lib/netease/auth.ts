@@ -46,11 +46,15 @@ function getSessionStorage(): Storage | null {
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(t);
       resolve();
-    }, { once: true });
+    };
+    const t = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -91,6 +95,7 @@ async function checkQrStatus(key: string, signal?: AbortSignal): Promise<QrCheck
   if (code === 802) return { state: "scanned" };
   if (code === 803) {
     const cookie = typeof body.cookie === "string" && body.cookie ? body.cookie : body.data?.cookie;
+    if (!cookie) throw new NeteaseError("api", "未返回登录 Cookie");
     return { state: "confirmed", cookie };
   }
   return { state: "waiting" };
@@ -177,6 +182,10 @@ export async function saveSession(
     loggedInAt: Date.now(),
   };
   memorySession = { cookie, profile: session };
+  // 播放 URL 按账号签名、TTL 缓存 key 不含会话：换账号登录前先清掉旧账号的缓存，
+  // 避免前一个用户的播放/查询结果串给新用户（清理失败不影响会话写入）。
+  neteaseClient.clearCache();
+  clearPlaybackCache();
   try {
     getSessionStorage()?.setItem(SESSION_COOKIE_KEY, cookie);
   } catch {
@@ -194,11 +203,17 @@ export async function loadSession(): Promise<{
   profile?: StoredNeteaseSession;
 } | null> {
   const ssCookie = getSessionStorage()?.getItem(SESSION_COOKIE_KEY);
+  // 先读一次 IndexedDB：命中记住登录会话时，可还原 remember 标记与 profile，
+  // 即使本次走 sessionStorage 快路径也能保持登录态完整（T18）。
+  const stored = await getNeteaseSession();
   if (ssCookie) {
+    if (stored?.cookie === ssCookie) {
+      memorySession = { cookie: ssCookie, profile: stored };
+      return { cookie: ssCookie, remember: true, profile: stored };
+    }
     memorySession = { cookie: ssCookie };
     return { cookie: ssCookie, remember: false };
   }
-  const stored = await getNeteaseSession();
   if (stored?.cookie) {
     memorySession = { cookie: stored.cookie, profile: stored };
     return { cookie: stored.cookie, remember: true, profile: stored };
@@ -214,10 +229,23 @@ export async function clearSession(): Promise<void> {
   } catch {
     // 忽略
   }
-  await deleteNeteaseSession();
+  // 各清理步骤独立隔离：单步失败不阻塞其余清理，内存态与缓存清理总会执行。
+  try {
+    await deleteNeteaseSession();
+  } catch {
+    // 忽略（IndexedDB 清理失败不阻塞登出）
+  }
   memorySession = null;
-  neteaseClient.clearCache();
-  clearPlaybackCache();
+  try {
+    neteaseClient.clearCache();
+  } catch {
+    // 忽略
+  }
+  try {
+    clearPlaybackCache();
+  } catch {
+    // 忽略
+  }
 }
 
 /** 登出：先清本地，再尽力而为通知第三方 /logout（失败忽略）。 */
