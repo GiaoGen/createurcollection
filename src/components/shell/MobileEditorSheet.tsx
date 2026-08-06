@@ -1,17 +1,30 @@
 "use client";
-import { AnimatePresence, motion, useDragControls } from "motion/react";
+import { AnimatePresence, motion, useDragControls, useReducedMotion } from "motion/react";
 import { X } from "lucide-react";
 import { useCompilationStore } from "@/store/use-compilation-store";
 import { EDITOR_PANELS, EditorTabs, FaceSwitcher } from "@/components/editor/panels";
 
 const SHEET_SPRING = { type: "spring", stiffness: 260, damping: 28, mass: 0.8 } as const;
 const FADE = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } as const;
+const PANEL_IN = { duration: 0.32, ease: [0.22, 1, 0.36, 1] } as const;
+const PANEL_OUT = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } as const;
+const INSTANT = { duration: 0 } as const;
 
 export function MobileEditorSheet() {
   const open = useCompilationStore((s) => s.mobileSheetOpen);
   const setOpen = useCompilationStore((s) => s.setMobileSheetOpen);
   const mode = useCompilationStore((s) => s.mode);
   const controls = useDragControls();
+  const reduced = useReducedMotion();
+
+  // prefers-reduced-motion: no spring / no elastic drag / no cross-fade. The
+  // sheet and panel still mount/unmount through AnimatePresence, just without
+  // any travelling animation (the global CSS rule can't reach JS-driven ones).
+  const sheetTransition = reduced ? INSTANT : SHEET_SPRING;
+  const fadeTransition = reduced ? INSTANT : FADE;
+  const panelIn = reduced ? INSTANT : PANEL_IN;
+  const panelOut = reduced ? INSTANT : PANEL_OUT;
+  const dragElastic = reduced ? 0 : { top: 0, bottom: 0.6 };
 
   const Panel = EDITOR_PANELS[mode];
 
@@ -21,8 +34,8 @@ export function MobileEditorSheet() {
         <motion.div
           className="fixed inset-0 z-50 md:hidden"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1, transition: FADE }}
-          exit={{ opacity: 0, transition: FADE }}
+          animate={{ opacity: 1, transition: fadeTransition }}
+          exit={{ opacity: 0, transition: fadeTransition }}
         >
           {/* 背景：点击关闭 */}
           <div className="absolute inset-0 bg-black/20" onClick={() => setOpen(false)} />
@@ -31,12 +44,12 @@ export function MobileEditorSheet() {
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
-            transition={SHEET_SPRING}
+            transition={sheetTransition}
             drag="y"
             dragListener={false}
             dragControls={controls}
             dragConstraints={{ top: 0, bottom: 0 }}
-            dragElastic={{ top: 0, bottom: 0.6 }}
+            dragElastic={dragElastic}
             onDragEnd={(_, info) => {
               if (info.offset.y > 120) setOpen(false);
             }}
@@ -72,8 +85,8 @@ export function MobileEditorSheet() {
                   key={mode}
                   className="p-4"
                   initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0, transition: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
-                  exit={{ opacity: 0, y: -8, transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } }}
+                  animate={{ opacity: 1, y: 0, transition: panelIn }}
+                  exit={{ opacity: 0, y: -8, transition: panelOut }}
                 >
                   <Panel />
                 </motion.div>

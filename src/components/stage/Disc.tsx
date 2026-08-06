@@ -1,6 +1,7 @@
 "use client";
 
 import { useFrame } from "@react-three/fiber";
+import { useReducedMotion } from "motion/react";
 import * as THREE from "three";
 import { useEffect, useMemo, useRef } from "react";
 
@@ -19,6 +20,7 @@ interface DiscProps {
 export function Disc({ texture, isPlaying }: DiscProps) {
   const discRef = useRef<THREE.Mesh>(null);
   const speed = useRef(0);
+  const reduced = useReducedMotion();
 
   const geometry = useMemo(() => {
     const g = new THREE.CylinderGeometry(DISC_RADIUS, DISC_RADIUS, DISC_THICK, 64);
@@ -28,9 +30,14 @@ export function Disc({ texture, isPlaying }: DiscProps) {
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useFrame((state, dt) => {
-    const d = Math.min(dt, 0.05);
     const disc = discRef.current;
     if (!disc) return;
+    // prefers-reduced-motion: keep the disc still.
+    if (reduced) {
+      speed.current = 0;
+      return;
+    }
+    const d = Math.min(dt, 0.05);
     // Exponential accel/decel to/from the spin speed — no abrupt stop on pause.
     const target = isPlaying ? SPIN_RAD_PER_S : 0;
     speed.current += (target - speed.current) * (1 - Math.exp(-d * (isPlaying ? 8 : 1.2)));

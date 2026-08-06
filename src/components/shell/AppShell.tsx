@@ -112,7 +112,7 @@ export function AppShell() {
         </div>
         {/* 桌面 Player 横跨 Stage+Inspector 底部；移动端 Player 在头部下方固定底栏 */}
         <Player className="hidden md:flex h-[72px] shrink-0 border-t border-[var(--line)]" />
-        <Player className="md:hidden" />
+        <Player className="md:hidden border-t border-[var(--line)]" />
       </div>
       <MobileEditorSheet />
       {/* 隐藏的宣传图节点：position:fixed 移出视口，供 html-to-image 抓取 */}

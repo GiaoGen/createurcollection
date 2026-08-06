@@ -2,6 +2,7 @@
 
 import { useFrame, useThree } from "@react-three/fiber";
 import { RoundedBox } from "@react-three/drei";
+import { useReducedMotion } from "motion/react";
 import * as THREE from "three";
 import { useEffect, useMemo, useRef } from "react";
 import type { RefObject } from "react";
@@ -32,6 +33,10 @@ const SPRING_K = 110;
 const SPRING_C = 22;
 const SPRING_M = 1.1;
 
+/* Hard-stop epsilon: snap lid/disc exactly to target when this close, so the
+   demand loop doesn't keep a sub-pixel drift alive after the gesture. */
+const STOP_EPS = 0.0005;
+
 interface CDCaseProps {
   face: FaceTarget;
   viewAngleRef: RefObject<{ x: number; y: number }>;
@@ -43,6 +48,8 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
   const caseGroupRef = useRef<THREE.Group>(null); // clickable assembly
   const lidRef = useRef<THREE.Group>(null);
   const discGroupRef = useRef<THREE.Group>(null);
+
+  const reduced = useReducedMotion();
 
   const project = useCompilationStore((s) => s.project);
   const isPlaying = useCompilationStore((s) => s.player.isPlaying);
@@ -151,6 +158,29 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
     const view = viewGroupRef.current;
     if (!g || !view) return;
 
+    // prefers-reduced-motion: no spring / no lerp / no inertia / no parallax.
+    // Drag still follows the finger, but release snaps straight back to the
+    // base view — and the lid/disc jump straight to their target.
+    if (reduced) {
+      g.rotation.y = targetY;
+      parCur.current = { x: 0, y: 0 };
+      if (!dragging.current) {
+        dragVel.current = { x: 0, y: 0 };
+        dragRot.current = { x: 0, y: 0 };
+      }
+      const lidTarget = openRef.current ? LID_OPEN : 0;
+      lidAngle.current = lidTarget;
+      lidVel.current = 0;
+      if (lidRef.current) lidRef.current.rotation.x = lidTarget;
+      const discTarget = openRef.current ? DISC_SLIDE : 0;
+      discX.current = discTarget;
+      if (discGroupRef.current) discGroupRef.current.position.x = discTarget;
+      const va = viewAngleRef.current;
+      view.rotation.x = va.x + dragRot.current.x;
+      view.rotation.y = va.y + dragRot.current.y;
+      return;
+    }
+
     // Face tabs drive a smoothed target yaw — exponential damping, no setState.
     const k = 1 - Math.exp(-d * 6);
     g.rotation.y += (targetY - g.rotation.y) * k;
@@ -177,24 +207,36 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
     view.rotation.x = va.x + dragRot.current.x + parCur.current.x;
     view.rotation.y = va.y + dragRot.current.y + parCur.current.y;
 
-    // Lid hinge spring → ~0.22 rad open.
+    // Lid hinge spring → ~0.22 rad open. Open/close share the same spring, so
+    // the two directions run at equal speed; snap to the exact target once it
+    // settles (hard stop — no lingering micro-oscillation).
     const lidTarget = openRef.current ? LID_OPEN : 0;
-    const a = (lidTarget - lidAngle.current) * (SPRING_K / SPRING_M) - lidVel.current * (SPRING_C / SPRING_M);
-    lidVel.current += a * d;
-    lidAngle.current += lidVel.current * d;
+    if (Math.abs(lidTarget - lidAngle.current) < STOP_EPS && Math.abs(lidVel.current) < 0.01) {
+      lidAngle.current = lidTarget;
+      lidVel.current = 0;
+    } else {
+      const a = (lidTarget - lidAngle.current) * (SPRING_K / SPRING_M) - lidVel.current * (SPRING_C / SPRING_M);
+      lidVel.current += a * d;
+      lidAngle.current += lidVel.current * d;
+    }
     if (lidRef.current) lidRef.current.rotation.x = lidAngle.current;
 
-    // Disc slide-out (~2/3 exposed), symmetric speed open ↔ close.
+    // Disc slide-out (~2/3 exposed), symmetric speed open ↔ close. The
+    // exponential approach never overshoots; snap to target when close (clamp).
     const discTarget = openRef.current ? DISC_SLIDE : 0;
-    const dDisc = 1 - Math.exp(-d * 3);
-    discX.current += (discTarget - discX.current) * dDisc;
+    if (Math.abs(discTarget - discX.current) < STOP_EPS) {
+      discX.current = discTarget;
+    } else {
+      const dDisc = 1 - Math.exp(-d * 3);
+      discX.current += (discTarget - discX.current) * dDisc;
+    }
     if (discGroupRef.current) discGroupRef.current.position.x = discX.current;
 
     // Keep the demand frame loop alive only while something is still moving.
     const moving =
       Math.abs(g.rotation.y - targetY) > 0.001 ||
-      Math.abs(lidTarget - lidAngle.current) > 0.0005 ||
-      Math.abs(discTarget - discX.current) > 0.0005 ||
+      Math.abs(lidTarget - lidAngle.current) > STOP_EPS ||
+      Math.abs(discTarget - discX.current) > STOP_EPS ||
       Math.abs(dragRot.current.x) > 0.0001 ||
       Math.abs(dragRot.current.y) > 0.0001 ||
       Math.abs(parCur.current.x - parTarget.current.x) > 0.0001 ||
