@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { FilterId, SpineStyle } from "@/types/compilation";
 import { bakeFilteredUrl } from "@/lib/image/art-filters";
@@ -228,21 +228,25 @@ function makeTrayTexture(): THREE.CanvasTexture {
  * cover/disc painters — so the filter is baked into the artwork only, while
  * the square crop, vignette, disc vinyl + label and flipX mirror keep working.
  *
- * The texture is recreated per input change (matching the brief's
- * "dispose + rebuild" contract) and disposed by the cleanup below.
+ * Debounce-hold UX: filter clicks are debounced for 150ms (so heavy filters —
+ * oilpainting/vhs/glitch/collage — stay responsive when clicking through
+ * quickly). While a new (url, filter) is pending, the PREVIOUS baked frame
+ * stays on the mesh instead of reverting to the grey placeholder; the freshly
+ * painted texture replaces it once the bake lands and the old one is disposed
+ * (supersede). The "NO COVER" placeholder is shown only when there is
+ * genuinely no prior frame yet (first load / no image) and is kept on bake
+ * failure rather than nuking a good frame.
  */
-/** Per-texture bake timer id — plain module Map (not React state/ref), so the
- *  useMemo factory can schedule a debounced bake and the dispose effect can
- *  cancel it when a newer filter/image supersedes the texture first. */
-const texTimers = new WeakMap<THREE.CanvasTexture, number>();
-
 export function useArtworkTexture(
   url: string | null,
   filter: FilterId,
   mode: "cover" | "disc" = "cover",
   flipX = false
 ): THREE.Texture {
-  const tex = useMemo(() => {
+  // The texture currently on the mesh. Starts as the placeholder; a completed
+  // bake swaps in a freshly painted one, so the debounce window keeps showing
+  // the previous frame (no grey flash on first load or on filter clicks).
+  const [tex, setTex] = useState<THREE.CanvasTexture>(() => {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = TEX;
     const ctx = canvas.getContext("2d")!;
@@ -250,55 +254,77 @@ export function useArtworkTexture(
     const t = new THREE.CanvasTexture(canvas);
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
-
-    if (url) {
-      // Debounced (150ms) bake through the art-filter pipeline. The filtered
-      // imageUrl is composited by paintCover/paintDisc so the square crop,
-      // vignette, disc vinyl + label and flipX mirror all keep working.
-      // Heavy filters (oilpainting/vhs/glitch/collage) stay responsive when
-      // the user clicks through filters quickly: the pending timer is cleared
-      // by the dispose effect below if this texture is superseded first.
-      const timer = window.setTimeout(() => {
-        bakeFilteredUrl(url, filter, TEX)
-          .then((baked) => {
-            const img = new Image();
-            img.decoding = "async";
-            img.onload = () => {
-              ctx.clearRect(0, 0, TEX, TEX);
-              if (mode === "cover") paintCover(ctx, img, "original", flipX);
-              else paintDisc(ctx, img, "original");
-              t.needsUpdate = true;
-            };
-            img.onerror = () => {
-              ctx.clearRect(0, 0, TEX, TEX);
-              paintPlaceholder(ctx, "NO COVER");
-              t.needsUpdate = true;
-            };
-            img.src = baked;
-          })
-          .catch(() => {
-            ctx.clearRect(0, 0, TEX, TEX);
-            paintPlaceholder(ctx, "NO COVER");
-            t.needsUpdate = true;
-          });
-      }, 150);
-      texTimers.set(t, timer);
-    }
-
     return t;
-  }, [url, filter, mode, flipX]);
+  });
 
-  useEffect(
-    () => () => {
-      const timer = texTimers.get(tex);
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-        texTimers.delete(tex);
+  // Dispose the texture a newer bake supersedes (and the live one on unmount).
+  useEffect(() => () => tex.dispose(), [tex]);
+
+  // Guards late async bakes from a superseded (url, filter) overwriting a
+  // newer frame — a bake already in flight can't be cancelled, only ignored.
+  const requestKey = useRef("");
+
+  useEffect(() => {
+    const key = `${url ?? ""}|${filter}|${mode}|${flipX}`;
+    requestKey.current = key;
+    const stale = () => requestKey.current !== key;
+
+    // Debounced bake — the previous texture stays mounted for these 150ms.
+    // A null url has nothing to bake, so the placeholder swap fires almost
+    // immediately (0ms) instead of on the debounce clock.
+    const timer = window.setTimeout(() => {
+      if (!url) {
+        // No image at all → "NO COVER" (fresh state has no prior frame).
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = TEX;
+        const ctx = canvas.getContext("2d")!;
+        paintPlaceholder(ctx, "NO COVER");
+        const t = new THREE.CanvasTexture(canvas);
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.anisotropy = 8;
+        setTex(t);
+        return;
       }
-      tex.dispose();
-    },
-    [tex]
-  );
+
+      const paint = (bakedSrc: string) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.onload = () => {
+          if (stale()) return; // a newer request superseded this bake
+          const canvas = document.createElement("canvas");
+          canvas.width = canvas.height = TEX;
+          const ctx = canvas.getContext("2d")!;
+          if (mode === "cover") paintCover(ctx, img, "original", flipX);
+          else paintDisc(ctx, img, "original");
+          const t = new THREE.CanvasTexture(canvas);
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.anisotropy = 8;
+          setTex(t);
+        };
+        img.onerror = () => {
+          /* keep the previous frame (placeholder on first load) */
+        };
+        img.src = bakedSrc;
+      };
+
+      if (filter === "original") {
+        // Fast path: no filter → skip the bake PNG encode/decode round-trip
+        // and draw the source straight into the texture canvas (lossless).
+        paint(url);
+      } else {
+        bakeFilteredUrl(url, filter, TEX)
+          .then(paint)
+          .catch(() => {
+            /* keep the previous frame (placeholder on first load) */
+          });
+      }
+    }, url ? 150 : 0);
+
+    return () => {
+      window.clearTimeout(timer);
+      requestKey.current = ""; // any in-flight bake for this request is stale
+    };
+  }, [url, filter, mode, flipX]);
 
   return tex;
 }
