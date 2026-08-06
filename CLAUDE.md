@@ -42,7 +42,7 @@ pnpm lint     # ESLint（验收前必须通过）
 
 - **TypeScript**：`strict` 已开；禁止大面积 `any`；类型集中在 `src/types/compilation.ts`。
 - **状态管理**：编辑器状态用 Zustand，`persist` 中间件写 `localStorage`。Store 拆分：Project / Editor / Player / 3D presentation 四个 slice。
-- **音乐 Provider 抽象**：必须走 `lib/music/provider.ts` 的 `MusicProvider` 接口。默认 `DemoMusicProvider`（无 API Key 无外部服务也能完整跑）。`NeteaseLinkProvider` 仅做分享链接解析 + 手动补全信息 + "在网易云打开"，**绝不抓取受版权保护的音频、不绕过会员、不把网易云 Cookie 暴露到前端**。
+- **音乐 Provider 抽象**：必须走 `lib/music/provider.ts` 的 `MusicProvider` 接口。`DemoMusicProvider` 离线回退（合成 WAV，无外部服务也能完整演示）；`NeteaseProvider` 为主源——自托管 `@neteasecloudmusicapienhanced/api`（社区继任 Binaryify，Node 22+/Docker，默认 :3001），经 `src/app/api/netease/[...path]/route.ts` 服务器端代理，二维码登录→「我喜欢的音乐」/搜索添加→`/song/url/v1` 网页播放。**网易云 cookie 仅存服务端 httpOnly，绝不出现在前端 JS/localStorage**；VIP/版权受限歌曲返回空 URL → 播放禁用并显示「受限」，不做绕过、不开解灰（`ENABLE_GENERAL_UNBLOCK` 默认关，是否开启由用户决定）。需求变更记录：`createyourcollection.md` §三。
 - **图片资源生命周期**：上传图片在进 3D 材质前限制最长边 ≤1600px 并转 Blob；Object URL 必须释放；纹理更新后 `dispose` 旧纹理。
 - **高频动画状态**：pointermove / 拖拽旋转等不用 React setState；用 Motion Value / ref / `useFrame`。
 - **按钮必须真实可用**：不允许装饰性假按钮。

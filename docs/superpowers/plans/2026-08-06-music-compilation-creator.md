@@ -4,7 +4,7 @@
 
 **Goal:** 三小时内交付一个可运行的视觉/动效优先的音乐精选集（Mix CD）创作网站：编辑信息与封面、3D CD 盒实时展示、曲目播放、localStorage 持久化、PNG 导出，并部署 Vercel。
 
-**Architecture:** Next.js App Router 单页应用。桌面三段式（ProjectRail + CD Stage + Inspector）+ 底部 Player；移动端精简头部 + 全屏 Stage + Bottom Sheet。编辑器状态用 Zustand（persist→localStorage）。3D 用 R3F 单碟 CD 盒组件（参考已安装的 `cd-showcase-3d` skill 的交互/贴图/阻尼模式，不直接复用其单文件 HTML）。图片管线：上传→resize(≤1600px)→crop(react-easy-crop)→filter(CSS/SVG 预览，Canvas 烘焙)→CanvasTexture。音频用 Demo Provider 合成 WAV data URI，保证无外部接口可完整播放。
+**Architecture:** Next.js App Router 单页应用。桌面三段式（ProjectRail + CD Stage + Inspector）+ 底部 Player；移动端精简头部 + 全屏 Stage + Bottom Sheet。编辑器状态用 Zustand（persist→localStorage）。3D 用 R3F 单碟 CD 盒组件（参考已安装的 `cd-showcase-3d` skill 的交互/贴图/阻尼模式，不直接复用其单文件 HTML）。图片管线：上传→resize(≤1600px)→crop(react-easy-crop)→filter(12 艺术滤镜，Canvas 像素烘焙，预览降采样+防抖)→CanvasTexture。音乐双源：`DemoMusicProvider`（合成 WAV data URI，离线可完整演示）+ `NeteaseProvider`（自托管 `@neteasecloudmusicapienhanced/api` 经 Next.js 代理，二维码登录→我喜欢的音乐/搜索→网页播放，Task 16-18）。
 
 **Tech Stack:** Next.js 16.3.0 (App Router) · React 19.2.8 · TypeScript 5.9.3 · Tailwind v4 · zustand 5 · motion 12 · three 0.185 / @react-three/fiber 9 / @react-three/drei 10 · react-easy-crop 6 · html-to-image · lucide-react · pnpm 11
 
@@ -16,7 +16,7 @@
 - 动效曲线（Motion 中复用）：反馈 `{duration:0.18, ease:[0.2,0.8,0.2,1]}`；面板 `{duration:0.32, ease:[0.22,1,0.36,1]}`；物理 `{type:"spring",stiffness:260,damping:28,mass:0.8}`；CD 开合 `{type:"spring",stiffness:110,damping:22,mass:1.1}`。
 - 3D：`<Canvas frameloop="demand" dpr={[1,1.5]}>`；静止停渲；高频角度走 ref/useFrame，禁止 pointermove→setState。
 - 图片：最长边 ≤1600px 转 Blob；Object URL 用后释放；纹理更新 `dispose` 旧纹理。
-- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 默认；网易云仅链接解析，不碰版权音频、不暴露 Cookie。
+- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 离线回退；`NeteaseProvider` 为主源——自托管 `@neteasecloudmusicapienhanced/api`（社区继任 Binaryify，原包已下架），经 Next.js route handler 服务器端代理，网易云 cookie 仅存服务端 httpOnly，绝不出现在前端 JS/localStorage。VIP/版权受限歌曲 `/song/url/v1` 返回 null → 播放禁用并显示「受限」，不做绕过、不开解灰。
 - 无障碍：必须支持 `@media (prefers-reduced-motion: reduce)`。
 - 按钮必须真实可用；移动端不做桌面等比缩放。
 - 验收（§十二）全部通过；`pnpm lint` 与 `pnpm build` 必须通过。
@@ -59,16 +59,23 @@ src/
 ├─ lib/
 │  ├─ image/
 │  │  ├─ resize.ts            # resizeImageToMax / fileToDataUrl
-│  │  ├─ crop.ts              # cropImage(src, crop, zoom, rotation)
-│  │  └─ filters.ts           # filterToCss / filterToSvgId / bakeFilter
+│  │  ├─ crop.ts              # cropImage(src, cropPixels, rotation)
+│  │  └─ art-filters.ts       # 12 艺术滤镜 + bakeFilteredUrl（预览 320 / 烘焙 1600）
 │  ├─ music/
 │  │  ├─ types.ts             # MusicProvider 接口 + Track/PlayableSource
 │  │  ├─ synthesize.ts        # 合成演示 WAV data URI
-│  │  ├─ provider.ts          # getMusicProvider() 单例
-│  │  ├─ demo-provider.ts     # DemoMusicProvider
-│  │  └─ netease-link-provider.ts # NeteaseLinkProvider（仅链接解析）
+│  │  ├─ provider.ts          # getMusicProvider() 单例（demo ↔ netease 切换）
+│  │  ├─ demo-provider.ts     # DemoMusicProvider（离线回退）
+│  │  └─ netease-provider.ts  # NeteaseProvider（Task 16-18 实现）
 │  ├─ export-image.ts         # toPng(ExportCard node)
 │  └─ storage.ts              # id 生成等小工具（可并入 store）
+├─ app/
+│  └─ api/
+│     └─ netease/
+│        └─ [...path]/route.ts # 服务器端代理 → 自托管 Netease API（cookie httpOnly）
+└─ components/netease/
+   ├─ NeteaseLoginModal.tsx    # 二维码登录弹层（Task 16）
+   └─ TrackSourcePicker.tsx    # 我喜欢的音乐/搜索 添加曲目（Task 17）
 ├─ store/
 │  └─ use-compilation-store.ts
 ├─ data/
@@ -520,9 +527,20 @@ export function getMusicProvider(): MusicProvider { return singleton; }
 export function setMusicProvider(p: MusicProvider) { singleton = p; } // 未来切换正式源
 ```
 
-- [ ] **Step 5: `src/lib/music/netease-link-provider.ts`（实验性，仅链接解析）**
+- [ ] **Step 5: `src/lib/music/netease-provider.ts`（壳；真实实现在 Task 16-18）**
 
-`resolve(input)`：从网易云分享链接（`music.163.com/song?id=...` 或 `#/song?id=...`）正则提取歌曲 ID，返回 `{ id, title: "", artist: "" }`（标题/艺术家由用户手动补全）；`getPlayableSource` 返回 `null`（不提供音频）。不做任何版权抓取/反灰/解灰。
+```ts
+import type { MusicProvider, PlayableSource, TrackMetadata, TrackSearchResult } from "./types";
+import type { Track } from "@/types/compilation";
+
+// 真实实现见 Task 16（后端代理+登录）、17（我喜欢/搜索+Provider）、18（受限状态）。
+// 壳：接口齐全、方法返回空/受限，保证编译与离线回退可运行。
+export class NeteaseProvider implements MusicProvider {
+  async search(_q: string): Promise<TrackSearchResult[]> { return []; }
+  async resolve(_i: string): Promise<TrackMetadata | null> { return null; }
+  async getPlayableSource(_t: Track): Promise<PlayableSource | null> { return null; }
+}
+```
 
 - [ ] **Step 6: 验证**
 
@@ -765,6 +783,15 @@ git add src/components/editor && git commit -m "feat: inspector with mode switch
 **Interfaces:**
 - Consumes: store `project`（frontCover/backCover/discArtwork/spineStyle/theme/tracks/activeTrackId/player.isPlaying）；`filters.ts` 的 CSS/SVG filter（Task 9，此步先只映射 original）。
 - Produces: `CDStage` 渲染 `<Canvas frameloop="demand" dpr={[1,1.5]}>`；内部维护展示角度 ref；暴露 `setView(face)` 供 face 按钮触发旋转。
+
+**遵循 cd-showcase-3d skill 的参数（2026-08-06 用户确认，来源 `.claude/skills/cd-showcase-3d/assets/template.html`）：**
+- **手势统一 Pointer Events**（鼠标 + 触屏一码）：拖拽旋转整盒 `dragRot.y` 钳制 ±0.7rad、`dragRot.x` ±0.35rad，`DRAG_SPEED=0.0045`；松手惯性：速度 `*exp(-dt*6)` 衰减、角度回中 `lerp(_,0,1-exp(-dt*3))`；移动端单指拖拽即旋转，点击=选中/开盒，完全无 hover 依赖。
+- **鼠标视差**：`PARALLAX_X 0.05 / PARALLAX_Y 0.07`，平滑 `1-exp(-dt*4)`。
+- **阻尼统一** `1-exp(-dt*k)`（帧率无关）；**不用 setState**，高频角度走 ref + useFrame。
+- **点击交互**：点盒子 → 转正面 + 开盖（盖缝 ~12°，弹簧 stiffness 110/damping 22/mass 1.1）+ 唱片滑出约 2/3；再点 → 收回关闭（开与合同速）。
+- **播放**：唱片 `rotation.z -= dt*2.8`；暂停/停止 → 速度指数衰减非骤停。
+- **贴图工厂**（CanvasTexture，SRGBColorSpace，anisotropy 8）：封面=居中裁方+径向暗角（外缘 `rgba(0,0,0,0.30)`）；脊部=封面均色压暗 `rgba(0,0,0,0.42)` + 竖排等宽标题（`rotate(-PI/2)`+`scale(1,-1)` 防镜像）+ 边高光；托盘=黑 `#101010` + 凹槽 + 轴座 + 4 螺丝；碟=黑胶满幅 `#0a0a0a`（不留透明环）+ 圆形照片 + 中心标签 + 轴孔。
+- **三态 face**：front=0°、back=π、disc=侧视（可略倾以观察抽碟）。
 
 - [ ] **Step 1: `src/components/stage/CDStage.tsx`——Canvas 外壳 + 交互状态**
 
@@ -1095,94 +1122,87 @@ git add src/lib/image src/components/editor/ArtworkEditor.tsx && git commit -m "
 
 ---
 
-## Task 9: 滤镜（FilterSelector + filters.ts 烘焙）
+## Task 9: 艺术滤镜（FilterSelector + art-filters.ts 像素管线）
+
+> 需求变更（2026-08-06）：**12 个艺术型滤镜**替代原 10 个简单 CSS 滤镜，Canvas 2D 逐像素处理。方案已确认：预览降采样(~320px)+150ms 防抖，纹理/导出全量烘焙。
 
 **Files:**
-- Create: `src/lib/image/filters.ts`
-- Create: `src/components/editor/FilterSelector.tsx`
+- Modify: `src/types/compilation.ts`（`FilterId` 改为 13 项：original + 12 艺术滤镜）
+- Create: `src/lib/image/art-filters.ts`（注册表 + 纯像素算法）
+- Create: `src/components/editor/FilterSelector.tsx`（真实实现，替换 Task 6 存根）
+- Modify: `src/components/stage/lib.ts`（`useArtworkTexture` 改用 art-filters 烘焙）
 
 **Interfaces:**
-- Consumes: store `face/setArtwork`、`art.filter`。
-- Produces: `FILTERS: { id, label, css, svgId? }[]`；`drawFiltered(ctx, image, filter)`（Canvas 烘焙）；`bakeFilterToUrl(src, filter)` 供导出与纹理用。
+- Consumes: store `face/setArtwork`、`art.filter`；`CropArea`。
+- Produces: `ART_FILTERS: { id: FilterId; label: string }[]`；`applyArtFilter(ctx, id, seed?)`（逐像素，O(n)）；`bakeFilteredUrl(src, filter, maxEdge?, seed?)`（预览 maxEdge=320 / 全量 maxEdge=1600）。
 
-- [ ] **Step 1: `src/lib/image/filters.ts`**
+- [ ] **Step 1: `FilterId` 类型改为 13 项（`src/types/compilation.ts`）**
+
+```ts
+export type FilterId =
+  | "original" | "ascii" | "halftone" | "pixel" | "oilpainting"
+  | "dither" | "comic" | "risograph" | "vhs" | "glitch"
+  | "sketch" | "collage" | "filmnegative";
+```
+
+- [ ] **Step 2: `src/lib/image/art-filters.ts`——注册表 + 纯像素函数**
 
 ```ts
 import type { FilterId } from "@/types/compilation";
 
-export interface FilterDef { id: FilterId; label: string; css: string; svgId?: string; }
-
-export const FILTERS: FilterDef[] = [
-  { id: "original", label: "Original", css: "none" },
-  { id: "mono", label: "Mono", css: "grayscale(1)" },
-  { id: "contrast", label: "High Contrast", css: "contrast(1.35)" },
-  { id: "faded", label: "Faded", css: "contrast(0.85) brightness(1.08) saturate(0.7)" },
-  { id: "cold", label: "Cold Chrome", css: "saturate(0.6) hue-rotate(160deg) brightness(1.05)" },
-  { id: "deepblack", label: "Deep Black", css: "contrast(1.5) brightness(0.72)" },
-  { id: "duotone", label: "Duotone", css: "url(#cyc-duotone)", svgId: "cyc-duotone" },
-  { id: "grain", label: "Grain", css: "contrast(1.05)", overlay: "noise" },
-  { id: "softblur", label: "Soft Blur", css: "blur(2px) brightness(1.03)" },
-  { id: "invert", label: "Invert", css: "invert(1) hue-rotate(180deg)" },
+export interface ArtFilterDef { id: FilterId; label: string; }
+export const ART_FILTERS: ArtFilterDef[] = [
+  { id: "original", label: "Original" },
+  { id: "ascii", label: "ASCII" },
+  { id: "halftone", label: "Halftone" },
+  { id: "pixel", label: "Pixel" },
+  { id: "oilpainting", label: "Oil Painting" },
+  { id: "dither", label: "Dither" },
+  { id: "comic", label: "Comic" },
+  { id: "risograph", label: "Risograph" },
+  { id: "vhs", label: "VHS" },
+  { id: "glitch", label: "Glitch" },
+  { id: "sketch", label: "Sketch" },
+  { id: "collage", label: "Collage" },
+  { id: "filmnegative", label: "Film Negative" },
 ];
 
-// 导出/纹理烘焙：CSS filter 直接 ctx.filter；duotone/grain 走像素后处理
-export async function bakeFilter(src: string, filter: FilterId): Promise<string> {
-  const img = await loadImage(src);
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  const ctx = c.getContext("2d", { willReadFrequently: true })!;
-  const def = FILTERS.find((f) => f.id === filter);
-  if (def && def.css && def.css !== "none" && !def.css.startsWith("url(")) {
-    ctx.filter = def.css;
-  }
-  ctx.drawImage(img, 0, 0);
-  if (filter === "duotone") applyDuotone(ctx, c.width, c.height);
-  if (filter === "grain") applyGrain(ctx, c.width, c.height);
-  return c.toDataURL("image/jpeg", 0.92);
-}
-
-function applyDuotone(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  // 冷色双色调：#10151f(暗) ↔ #e8e6df(亮)，按亮度线性映射
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const lo = [16, 21, 31], hi = [232, 230, 223];
-  for (let i = 0; i < data.length; i += 4) {
-    const lum = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255;
-    data[i] = lo[0] + (hi[0] - lo[0]) * lum;
-    data[i + 1] = lo[1] + (hi[1] - lo[1]) * lum;
-    data[i + 2] = lo[2] + (hi[2] - lo[2]) * lum;
-  }
-  ctx.putImageData(new ImageData(data, w, h), 0, 0);
-}
-
-function applyGrain(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  const g = ctx.createImageData(w, h);
-  for (let i = 0; i < g.data.length; i += 4) {
-    const n = Math.random() * 255;
-    g.data[i] = n; g.data[i + 1] = n; g.data[i + 2] = n;
-    g.data[i + 3] = Math.random() * 40; // 低透明度噪点
-  }
-  ctx.putImageData(g, 0, 0);
-}
+// 每个滤镜 = 纯函数 (data: Uint8ClampedArray, w, h, seed) => void，原地改像素（RGBA）
+export function applyArtFilter(ctx: CanvasRenderingContext2D, id: FilterId, seed = 0): void { /* 见算法 */ }
 ```
 
-Duotone 预览（CSS/SVG，挂页面一次）：`<svg><filter id="cyc-duotone"><feComponentTransfer><feFuncR type="table" tableValues="0.06 0.91"/><feFuncG type="table" tableValues="0.08 0.90"/><feFuncB type="table" tableValues="0.12 0.87"/></feComponentTransfer></filter></svg>`。Grain 预览用覆盖层：`background-image: url("data:image/svg+xml,...feTurbulence...")`，`mix-blend-mode: overlay`。预览与烘焙结果以烘焙为准。
-```
+每个滤镜核心算法（`ctx.getImageData` 后逐像素，`putImageData` 写回）：
+- **ascii**：先降采样到格子（如宽 96 格），亮度 → `" .:-=+*#%@"` 字符（暗→密），用 `fillText` 铺字符纹理。
+- **halftone**：分格（~8px）亮度 → 格内黑圆点半径（格越大越暗），白底。
+- **pixel**：块均色（块 12px）→ 最近邻放大（方块化）。
+- **oilpainting**：邻域(半径 4)像素按亮度分 8 桶，取最频桶平均色（油画笔触）。
+- **dither**：Bayer 4×4 阈值矩阵（`[0,8,2,10;12,4,14,6;3,11,1,9;15,7,13,5]`/16）黑白抖动。
+- **comic**：posterize 4 级 + 亮度网点 + 简单 Sobel 边缘勾黑线。
+- **risograph**：亮度二值化 → 双色（暗 `#1a2238` + 冷强调 `#5b7a9d`，**不用黄**）半色调错开 45° 网点。
+- **vhs**：水平扫描线（每 3px 暗一行）+ RGB 通道水平错位 1-2px + 噪点 + 行亮度轻微抖动。
+- **glitch**：RGB 通道错位（R/B 平移 ±6px）+ 按行切片位移（seed 伪随机，位移 -12..12px，色相轻微偏移）。
+- **sketch**：Sobel 边缘幅值 → 白底 `255-lum` 深线稿（阈值化）。
+- **collage**：错位纸片矩形（4-6 块，seed 驱动位置/旋转/透明度 0.85）+ 轻微边界加深。
+- **filmnegative**：RGB 通道反相 + 轻微对比增强。
 
-Duotone 实现（SVG，挂到 ExportCard / 预览层）：`<filter id="cyc-duotone"><feComponentTransfer><feFuncR type="table" tableValues="0.05 0.02"/><feFuncG .../><feFuncB .../></feComponentTransfer></filter>`。Grain 用 CSS 覆盖层（`background-image` SVG `feTurbulence` 噪点 data URI）实现，不改像素。
+**确定性**：重滤镜（oilpainting/vhs/glitch/collage）用 `seed = hash(face+id)` 保证预览与烘焙一致。**性能**：预览 `bakeFilteredUrl(src, filter, 320)` 防抖 150ms；重滤镜在 320px 下 O(320²) 可接受。
 
-- [ ] **Step 2: `src/components/editor/FilterSelector.tsx`**
+- [ ] **Step 3: `FilterSelector`——真实实现（替换 Task 6 存根）**
 
-网格（4 列）展示 10 个滤镜缩略：小方块内放当前 face 的 `imageUrl`（若有）应用对应 `css` filter，无图时灰色底 + 标签。点击 → `setArtwork(face, { filter: id })`。选中态：`border-[var(--strong-line)]` + 标签反色。缩略用 `style={{ filter: def.css }}`。SVG filter 需在页面挂 `<svg width=0 height=0 className="absolute">`（FilterSelector 顶部渲染一次）。
+13 格缩略网格（4-5 列）：小方块内渲染当前 face `imageUrl` 应用 `bakeFilteredUrl(..., maxEdge≈96)`（无图灰色底+标签）。异步加载 + 按 `face:filter:imageUrl` 缓存 Map。点击 → `setArtwork(face, { filter: id })`。选中态 `border-[var(--strong-line)]`。
 
-- [ ] **Step 3: 验证**
+- [ ] **Step 4: 纹理接入（`src/components/stage/lib.ts`）**
 
-Run: `pnpm dev`。10 种滤镜切脸实时生效；duotone/grain 生效；纹理同步（CDCase 的 `useArtworkTexture` 用 `drawFiltered` 烘焙后贴图）。
+`useArtworkTexture(imageUrl, filter)` 改为：`bakeFilteredUrl(imageUrl, filter, 1600)` 得到烘焙 URL → 新建 `CanvasTexture`（SRGB, anisotropy 8）；`imageUrl`/`filter` 变化时 dispose 重建。
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: 验证**
+
+`pnpm build` 通过。浏览器：13 格缩略均出效果；切滤镜后 3D 纹理同步；重滤镜（oil/glitch/vhs）预览流畅（320px 防抖）；无图灰色+NO COVER；预览与导出（Task 12）烘焙一致。
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/lib/image/filters.ts src/components/editor/FilterSelector.tsx && git commit -m "feat: filter presets with canvas bake"
+git add src/types/compilation.ts src/lib/image/art-filters.ts src/components/editor/FilterSelector.tsx src/components/stage/lib.ts && git commit -m "feat: art filters pipeline with 12 pixel filters"
 ```
 
 ---
@@ -1546,9 +1566,124 @@ Run: `pnpm lint`（Expected: 通过）与 `pnpm build`（Expected: 成功，无 
 
 ---
 
+### Task 16: NetEase 后端代理 + 二维码登录
+
+> 需求变更（2026-08-06）：使用非官方 `@neteasecloudmusicapienhanced/api`，登录后读取「我喜欢的音乐」、搜索添加、直接网页播放。前端 UI 设计**必须先经用户确认**再实现。
+
+**Files:**
+- Create: `src/app/api/netease/[...path]/route.ts`（服务器端代理，httpOnly cookie）
+- Create: `src/lib/netease/config.ts`（API 基址：`NETEASE_API_URL`，默认 `http://localhost:3001`）
+- Create: `src/store/use-netease-store.ts`（登录态：status/nickname/uid/avatarUrl/likedPlaylist 加载态）
+- Create: `src/components/netease/NeteaseLoginModal.tsx`（二维码登录弹层）
+- Modify: `src/components/shell/AppShell.tsx`（登录入口 + 模态挂载）
+
+**Interfaces:**
+- Consumes: `src/lib/music/types.ts`（Task 4）；自托管 API 服务（用户另行部署，Docker `moefurina/ncm-api` 或本地跑）。
+- Produces: 代理路由 `GET/POST /api/netease/[...path]`；登录态 store；`NeteaseLoginModal` 的三步二维码流程。
+
+- [ ] **Step 1: 代理路由 `src/app/api/netease/[...path]/route.ts`**
+
+转发到 `NETEASE_API_URL`；登录成功（`login/qr/check` 返回 803）时把 body 里的网易云 cookie 写进 httpOnly cookie `cyc_ncm_cookie`；其余请求从该 cookie 读出并作为转发时的 cookie 参数带上。响应原样返回前端。CORS 不需要（同源）。
+
+- [ ] **Step 2: `src/store/use-netease-store.ts`**
+
+```ts
+interface NeteaseState {
+  status: "anonymous" | "waiting" | "scanned" | "logged" | "expired";
+  key: string | null;
+  nickname: string | null;
+  uid: number | null;
+  avatarUrl: string | null;
+  setStatus; setKey; setProfile; logout; // actions
+}
+```
+
+- [ ] **Step 3: `NeteaseLoginModal`——二维码登录三步**
+
+调用顺序（全部走 `/api/netease/` 代理）：
+`/login/qr/key` → 拿 key；`/login/qr/create?key=<key>&qrimg=true` → 拿二维码图片 dataURL；轮询 `/login/qr/check?key=<key>`（2s 间隔）：
+- `code 801` 等待扫码（UI：提示"打开网易云 App 扫码"）
+- `code 802` 已扫码待确认
+- `code 800` 过期 → 重新生成
+- `code 803` 成功 → 代理存 cookie → `setProfile` 并关闭弹层
+
+登录后顶部显示头像/昵称，提供「退出登录」（清 cookie：代理 `DELETE /api/netease/session` 或调用 `/logout`）。
+
+- [ ] **Step 4: 验证**
+
+`pnpm build` 通过。联调需自托管 API 服务（用户本地起 `localhost:3001`）：扫码登录成功、cookie 已存 httpOnly、刷新保持登录。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/app/api/netease src/lib/netease src/store src/components/netease && git commit -m "feat: netease backend proxy and qr login"
+```
+
+### Task 17: NeteaseProvider + 我喜欢/搜索 添加 UI
+
+> 前端 UI 设计**必须先经用户确认**再实现。
+
+**Files:**
+- Modify: `src/types/compilation.ts`（`Track` 增 `neteaseId?: string`、`album?: string`、`coverUrl?: string`）
+- Modify: `src/lib/music/netease-provider.ts`（真实实现）
+- Create: `src/components/editor/TrackSourcePicker.tsx`（Tab：我喜欢的音乐 / 搜索）
+- Modify: `src/components/editor/TrackEditor.tsx`（「从网易云添加」入口）
+
+**Interfaces:**
+- Consumes: Task 16 代理 + 登录态；store `addTrack`。
+- Produces: 真实 `NeteaseProvider`（`search` → `/api/netease/cloudsearch`；`getPlayableSource` → `/api/netease/song/url/v1?id=<neteaseId>`）；`TrackSourcePicker` 点选歌曲 → `addTrack({ id, title, artist, duration, src: "", neteaseId, coverUrl, album })`。
+
+- [ ] **Step 1: Track 类型扩展**（`neteaseId`/`album`/`coverUrl` 可选字段，`src` 保持空串由 provider 解析）。
+- [ ] **Step 2: `NeteaseProvider` 真实实现**
+
+`search(q)` → `/api/netease/cloudsearch?keywords=<q>` 映射结果；`getPlayableSource(track)` → 有 `neteaseId` 才请求 `/api/netease/song/url/v1?id=<id>`，`data[0].url` 为空/`null` 即受限返回 `null`；无 `neteaseId` 返回 `null`。
+
+- [ ] **Step 3: `TrackSourcePicker`**——双 Tab
+
+「我喜欢的音乐」：`/api/netease/playlist/mylike`（或 `user_playlist`+`playlist_track_all`）拉取列表，显示封面/歌名/艺术家/时长，点击行 → 添加到当前精选集（去重：已存在 `neteaseId` 的曲目行标记「已添加」）。「搜索」：输入关键词 → `/api/netease/cloudsearch?keywords=` → 同上添加。未登录时展示「去登录」按钮（唤起 NeteaseLoginModal）。移动端复用同一组件（Bottom Sheet 内）。
+
+- [ ] **Step 4: 验证**
+
+`pnpm build` 通过；联调：登录后拉到我喜欢的音乐、搜索命中、添加成功且刷新保留（`neteaseId` 持久化）。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/types src/lib/music/netease-provider.ts src/components/editor && git commit -m "feat: netease provider with liked-songs and search picker"
+```
+
+### Task 18: 播放器受限状态 + NetEase 播放联调
+
+**Files:**
+- Modify: `src/hooks/use-player-engine.ts`（`getPlayableSource` 返回 null → 受限禁用；真实 URL 播放）
+- Modify: `src/components/player/Player.tsx`、`src/components/editor/TrackEditor.tsx`（受限行显示「VIP 受限 / 无版权」，播放按钮禁用）
+
+**Interfaces:**
+- Consumes: `NeteaseProvider`、Task 11 播放引擎、store。
+- Produces: 受限状态在播放器与曲目行的可见反馈；NetEase 歌曲可真实播放。
+
+- [ ] **Step 1: 引擎受限处理**
+
+`play()` 里 `getPlayableSource` 返回 `null` → `setRestricted(true)` 并 `setIsPlaying(false)`，不在 UI 上假装可播；成功则照常播放。`restricted` 状态入 store（player slice）。
+
+- [ ] **Step 2: UI 反馈**——播放器当前曲目标记「VIP 受限」；TrackEditor 受限行右侧小字提示 + 禁用播放图标。
+
+- [ ] **Step 3: 验证**
+
+联调：登录后播放我喜欢的歌曲成功（唱片旋转/进度走动）；把一首 VIP 受限歌曲加入后播放按钮禁用并提示；刷新保持状态。`pnpm lint && pnpm build` 通过。
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/hooks src/components/player src/components/editor && git commit -m "feat: netease playback with restricted-state handling"
+```
+
 ## Self-Review 备注
 
 - 与 spec §十一 时间表对齐：Task1-4=00:00–00:15 初始化（脚手架+类型+store+demo）；Task5-6=00:15–00:45 骨架；Task7=00:45–01:25 CD 展示（20 分钟接不上则 StageFallback CSS 3D）；Task8-9=01:25–02:00 图片编辑；Task10-11=02:00–02:25 曲目+播放器；Task12-14=02:25–02:45 动效；Task15=02:45–03:00 检查部署。
 - cd-showcase-3d skill 不直接复用其单文件 HTML/MiniMax 环境，仅提炼交互模式与踩坑清单（§十一 兜底条款）。
 - `frameloop="demand"`、`dpr={[1,1.5]}`、Object URL 释放、纹理 dispose、高频角度走 ref——已在 Task 7/8 落实 §九。
 - 播放不自动播放、`track.src` 为空即静默跳过（无假按钮）——Task 11。
+- **NetEase 集成（Task 16-18，需求变更 2026-08-06）**：执行顺序在 Task 4 之后跑 16-17（登录/代理/Provider/来源选择器），Task 11 之后跑 18（受限状态联调）。涉及前端 UI（登录弹层、曲目来源选择器、受限状态反馈）的设计**必须先经用户确认再实现**（用户明确要求）。
+- 网易云 cookie 仅服务端 httpOnly；VIP/版权受限歌曲 `/song/url/v1` 返回空 → 禁用播放并显示「受限」，不开解灰。
+- **NetEase 已确认决策（2026-08-06）**：① NetEase UI 按建议设计（登录弹层 + 我喜欢的音乐/搜索 双 Tab 来源选择器，点行添加/已添加标记/VIP 标记）；② 解灰保持关闭——fork 默认 `ENABLE_GENERAL_UNBLOCK=true`，部署文档/`.env.example` 必须显式设 `false`；③ API 服务开发期指向 `localhost:3001`（`NETEASE_API_URL` 可配，部署方式后续定）。

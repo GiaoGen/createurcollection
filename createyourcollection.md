@@ -159,85 +159,64 @@
 
 ---
 
-# 三、网易云音乐接入方案
+# 三、网易云音乐接入方案（2026-08-06 更新）
 
 ## 现实情况
 
-目前不要把网易云音乐逆向接口作为项目核心依赖。
+使用**非官方**网易云 API。原 `Binaryify/NeteaseCloudMusicApi` 已归档、npm 包下架；社区活跃继任者为 **`NeteaseCloudMusicApiEnhanced/api-enhanced`**（npm `@neteasecloudmusicapienhanced/api`，Node 22+，默认端口 3000，Docker 可用）。它是第三方逆向接口，非官方开放能力，接口可能随时变化/失效，必须接受这一风险。
 
-广泛使用的 `Binaryify/NeteaseCloudMusicApi` 已在 2024 年归档，项目说明中提到因版权停止维护。后续社区版本仍然存在，但属于第三方逆向接口，并不是稳定的官方开放能力。
+本项目使用的功能边界：
 
-网易云历史上存在外链播放器：
+* 用户通过**二维码登录**网易云账号（不收集密码）
+* 读取用户**「我喜欢的音乐」**歌单（`playlist_mylike` / `user_playlist` + `playlist_track_all`）
+* **搜索**歌曲（`cloudsearch`）
+* 将歌曲**添加到自己创建的精选集**（保存 `neteaseId` 元数据）
+* 通过 `/song/url/v1` 获取可播放地址，**直接网页播放**
 
-```text
-https://music.163.com/outchain/player?type=2&id=歌曲ID&auto=0
+## 架构
+
+```
+浏览器(Next.js 前端)
+  │  HTTPS / 同源请求，只走我们自己的 API 路由
+  ▼
+Next.js Route Handlers  src/app/api/netease/[...path]/route.ts   ← 服务器端代理
+  │  持有网易云 cookie（仅服务端 httpOnly cookie，不出现在前端 JS）
+  ▼
+自托管 NeteaseCloudMusicApiEnhanced 服务（独立部署：localhost / Docker，如 :3001）
+  ▼
+网易云音乐服务器
 ```
 
-它可以通过 iframe 嵌入，但存在以下问题：
+要点：
 
-* 无法自由修改 iframe 内部样式
-* 无法稳定控制内部播放状态
-* 无法与自定义进度条完全同步
-* 部分歌曲可能因为版权无法站外播放
-* 服务策略可能发生变化
-* 跨域限制导致父页面不能直接读取播放器内部状态
+* 前端**不直接连** API 服务，全部经 Next.js route handler 代理；**网易云 cookie 绝不进 localStorage / 前端 JS**。
+* 登录态用我们自己的 httpOnly cookie 维持，服务端按需带上网易云 cookie 转发请求。
+* 音乐来源保持 Provider 抽象（`lib/music/provider.ts`）：`NeteaseProvider` 为主源，`DemoMusicProvider` 为离线回退（无 API 服务时网站仍可完整演示）。
 
-## 三小时版本采用的方案
+## 登录流程（二维码）
 
-建立统一的音乐来源适配层：
+1. `/api/netease/login/qr/key` → 获取 key
+2. `/api/netease/login/qr/create?key=...&qrimg=true` → 返回二维码图片 + key
+3. 前端展示二维码，轮询 `/api/netease/login/qr/check?key=...`：
+   - 801 等待扫码 → 802 已扫码待确认 → 803 登录成功（服务端存 cookie）
+   - 800 过期 → 重新生成二维码
+4. 成功后进入「我的网易云」模式：可拉取我喜欢的音乐 / 搜索添加。
 
-```ts
-interface MusicProvider {
-  search(query: string): Promise<TrackSearchResult[]>
-  resolve(input: string): Promise<TrackMetadata | null>
-  getPlayableSource(track: Track): Promise<PlayableSource | null>
-}
-```
+不实现：手机号密码登录（密码不上云）、短信验证码登录。
 
-实现两个 Provider：
+## 版权与限制（必须如实对待）
 
-### DemoMusicProvider
+* 很多歌曲是 **VIP / 版权受限**：`/song/url/v1` 返回空或仅试听片段。此时**播放按钮禁用**并显示「VIP 受限 / 无版权」状态，不做绕过。
+* API 自带 `ENABLE_GENERAL_UNBLOCK`（解灰）能力：**默认关闭**，是否开启由用户自行决定并自担风险；本项目功能不依赖它。
+* 不做：批量抓取/下载、外链传播、Cookie 暴露到前端、假装官方接口。
 
-默认启用。
+## Provider 边界
 
-负责：
-
-* 内置演示歌曲
-* 本地 MP3 或合法测试音频播放
-* 完整支持自定义播放器
-* 确保网站不依赖外部接口也能运行
-
-### NeteaseLinkProvider
-
-实验性功能。
-
-第一版只负责：
-
-* 接收网易云歌曲分享链接
-* 从链接中解析歌曲 ID
-* 允许用户手动补充歌曲名和艺术家
-* 保存原始网易云链接
-* 提供“在网易云打开”
-* 可选显示网易云外链 iframe
-
-不要：
-
-* 绕过会员限制
-* 使用“解灰”接口
-* 抓取受版权保护的完整音频
-* 将用户网易云 Cookie 暴露到前端
-* 假装第三方接口是网易云官方 API
+`MusicProvider` 接口不变。`NeteaseProvider.getPlayableSource(track)` 调 `/api/netease/song/url/v1?id=<neteaseId>` 取播放 URL；返回 `null` 即视为受限，播放器进入禁用状态。
 
 ## 后续正式产品方案
 
-音乐数据层必须保持 Provider 化，以便未来接入：
-
-* 正式授权的音乐服务
-* 用户自行上传的音频
-* Apple Music MusicKit
-* 其他提供官方 Web SDK 的平台
-
-Apple Music 的 MusicKit 官方支持网页端流媒体播放和自定义播放器，但需要开发者令牌及用户授权，可以作为未来正式接入方向。
+音乐数据层保持 Provider 化，以便未来接入正式授权的音乐服务、用户自行上传音频、Apple Music MusicKit（官方 Web SDK，需开发者令牌及用户授权）等。
 
 ---
 
@@ -1026,9 +1005,9 @@ src/
 * AI 自动生成封面
 * 歌词同步
 * 音频频谱分析
-* 完整网易云账号登录
-* 会员音乐解析
-* 服务端音频代理
+* 完整网易云账号登录（仅二维码登录，不实现密码/短信登录）
+* 会员歌曲解灰与绕权（`ENABLE_GENERAL_UNBLOCK` 默认关闭，由用户自行决定）
+* 批量抓取/下载/外链传播受版权音频
 * 复杂 WebGL 后处理
 * 多页面营销官网
 
@@ -1049,8 +1028,8 @@ src/
 5. 所有按钮必须真实可用，不创建装饰性假按钮。
 6. 不使用暖黄色、紫蓝渐变球或常见 AI 网站视觉。
 7. 不使用多层 Card 和圆角容器嵌套。
-8. 不直接接入存在版权风险的网易云音频解析接口。
-9. 网易云功能只实现分享链接解析和可替换 Provider 边界。
+8. 网易云使用自托管 `@neteasecloudmusicapienhanced/api` 服务，经 Next.js route handler 服务器端代理；网易云 cookie 仅存服务端 httpOnly，不出现在前端 JS。
+9. 网易云实现：二维码登录、读取「我喜欢的音乐」、搜索添加、经 `/song/url/v1` 网页播放；VIP/版权受限歌曲禁用播放并如实显示状态，不做绕过。
 10. 使用 DemoMusicProvider 保证项目在无 API Key、无外部服务时仍能完整运行。
 11. 所有高频动画避免 React setState。
 12. 移动端必须提供真实可操作的布局，而不是缩小桌面版。
