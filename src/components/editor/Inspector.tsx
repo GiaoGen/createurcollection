@@ -5,13 +5,14 @@ import { InfoEditor } from "./InfoEditor";
 import { SpineEditor } from "./SpineEditor";
 import { FilterSelector } from "./FilterSelector";
 import { TrackEditor } from "./TrackEditor";
+import { ArtworkEditor } from "./ArtworkEditor";
 import { EditorMode } from "@/types/compilation";
 import type { FC } from "react";
 
 const PANELS: Record<EditorMode, FC> = {
   info: InfoEditor,
-  artwork: FilterSelector, // Task 9 换为 ArtworkEditor 组合
-  filters: FilterSelector,
+  artwork: ArtworkEditor,
+  filters: FilterSelector, // Task 9 替换为完整滤镜选择器
   spine: SpineEditor,
   tracks: TrackEditor,
 };
