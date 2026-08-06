@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useSyncExternalStore, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { ProjectRail } from "./ProjectRail";
 import { CDStage } from "@/components/stage/CDStage";
@@ -13,22 +13,7 @@ import { ExportCard } from "@/components/export/ExportCard";
 import { exportCardPng } from "@/lib/export-image";
 import { getLatestCoverBake } from "@/lib/export-bake";
 import { useCompilationStore } from "@/store/use-compilation-store";
-
-/** 桌面断点（≥768px，与 Tailwind `md` 一致）。 */
-const DESKTOP_MQ = "(min-width: 768px)";
-
-/** 订阅 matchMedia 的 isDesktop；SSR 首帧取 false，客户端挂载后立即对齐真实断点。 */
-function useIsDesktop(): boolean {
-  return useSyncExternalStore(
-    (cb) => {
-      const mq = window.matchMedia(DESKTOP_MQ);
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
-    },
-    () => window.matchMedia(DESKTOP_MQ).matches,
-    () => false
-  );
-}
+import { useIsDesktop, DESKTOP_MQ } from "@/lib/use-is-desktop";
 
 export function AppShell() {
   const theme = useCompilationStore((s) => s.project.theme);

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Disc3, X } from "lucide-react";
@@ -27,6 +27,7 @@ import type { NeteaseSearchResponse } from "@/lib/netease/types";
 import type { CompilationTrack } from "@/types/compilation";
 import { formatTime } from "@/lib/storage";
 import { toDataURL as qrToDataURL } from "qrcode";
+import { useIsDesktop } from "@/lib/use-is-desktop";
 
 /**
  * 网易云添加（Task 19）：扫码登录 + 我喜欢的音乐/我的歌单/搜索 + 多选添加。
@@ -48,21 +49,6 @@ const INSTANT = { duration: 0 } as const;
 const SECURITY_NOTICE =
   "本功能通过第三方网易云音乐接口实现。登录凭证仅保存在当前浏览器中。请仅在你信任的 API 服务上使用扫码登录。";
 
-const DESKTOP_MQ = "(min-width: 768px)";
-
-/** 桌面断点订阅（与 AppShell 一致；SSR 首帧 false，挂载后对齐）。 */
-function useIsDesktop(): boolean {
-  return useSyncExternalStore(
-    (cb) => {
-      const mq = window.matchMedia(DESKTOP_MQ);
-      mq.addEventListener("change", cb);
-      return () => mq.removeEventListener("change", cb);
-    },
-    () => window.matchMedia(DESKTOP_MQ).matches,
-    () => false
-  );
-}
-
 type TabId = "liked" | "playlists" | "search";
 const TABS: { key: TabId; label: string }[] = [
   { key: "liked", label: "我喜欢的" },
@@ -70,10 +56,18 @@ const TABS: { key: TabId; label: string }[] = [
   { key: "search", label: "搜索" },
 ];
 
-/** 单行错误文案（kind==="api" 视为登录态失效，提供重新登录路径）。 */
+/**
+ * 单行错误文案。仅当 API 错误确认为登录态失效（code 301 或「需要登录/登录已失效/登录状态已过期」
+ * 等消息）时才走重新登录路径；其余 API 错误（404/500/限流/业务错误）与网络/超时/HTTP/CORS
+ * 一律可重试，绝不误踢登录态。
+ */
+function isAuthExpired(err: unknown): boolean {
+  return err instanceof NeteaseError && err.kind === "api" && (err.code === 301 || /需要登录|登录.{0,4}失效|登录状态已过期/.test(err.message));
+}
+
 function errorText(err: unknown): { message: string; authExpired: boolean } {
   if (err instanceof NeteaseError) {
-    return { message: err.message, authExpired: err.kind === "api" };
+    return { message: err.message, authExpired: isAuthExpired(err) };
   }
   return { message: err instanceof Error ? err.message : "加载失败", authExpired: false };
 }
@@ -132,12 +126,14 @@ export function NeteasePicker() {
     }
   }, [pickerOpen, status, refreshCookie]);
 
-  // 关闭：中止轮询 + 清选择。
+  // 关闭：中止轮询 + 清选择 + 复位来源状态（重开面板从干净初始态开始）。
   const close = useCallback(() => {
     abortRef.current?.abort();
     setSelected(new Map());
+    setSourcePlaylistId(undefined);
+    setActiveTab("liked");
     setPickerOpen(false);
-  }, [setSelected, setPickerOpen]);
+  }, [setSelected, setSourcePlaylistId, setActiveTab, setPickerOpen]);
 
   // Escape 关闭。
   useEffect(() => {
@@ -816,6 +812,7 @@ function PlaylistsTab(props: {
   const backToList = () => {
     setCurrent(null);
     onSourcePlaylistChange(undefined);
+    onClearAll(); // 不跨歌单残留选择，避免 handleAdd 用错误 sourcePlaylistId 打标
   };
 
   if (current) {
@@ -931,12 +928,13 @@ function SearchTab(props: {
         setError(null);
         return;
       }
-      setLoading(true);
-      setError(null);
+      // 先等防抖窗口，再进 loading——避免每敲一个字都闪「加载中…」。
       await new Promise<void>((resolve) => {
         timer = setTimeout(resolve, 400);
       });
       if (cancelled) return;
+      setLoading(true);
+      setError(null);
       try {
         const body = await neteaseClient.request<NeteaseSearchResponse>("/search", {
           params: { keywords: kw, limit: 20 },
