@@ -1,23 +1,32 @@
 "use client";
 import type { ReactNode } from "react";
-import { Plus, SlidersHorizontal, ListMusic, Sun, Moon, Download } from "lucide-react";
+import { Folder, Plus, SlidersHorizontal, ListMusic, Sun, Moon, Download } from "lucide-react";
 import { useCompilationStore } from "@/store/use-compilation-store";
+import { useProjectsStore } from "@/store/use-projects-store";
 
 const tools = [
   { mode: "info", icon: SlidersHorizontal, label: "信息" },
   { mode: "tracks", icon: ListMusic, label: "曲目" },
 ] as const;
 
-export function ProjectRail({ className = "" }: { className?: string }) {
+export function ProjectRail({
+  className = "",
+  onOpenProjects,
+}: {
+  className?: string;
+  onOpenProjects: () => void;
+}) {
   const mode = useCompilationStore((s) => s.mode);
   const setMode = useCompilationStore((s) => s.setMode);
   const theme = useCompilationStore((s) => s.project.theme);
   const setTheme = useCompilationStore((s) => s.setTheme);
-  const resetProject = useCompilationStore((s) => s.resetProject);
+  // 「新建」改为经项目 store 新建精选集（安全：新增并切换，不删除当前项目）。
+  const createProject = useProjectsStore((s) => s.create);
   return (
     <nav className={`${className} flex-col items-center py-3 gap-1 bg-[var(--surface)]`}>
       <div className="font-mono-num text-xs tracking-widest mb-4">CYC</div>
-      <IconBtn title="新建" onClick={resetProject}><Plus size={18} /></IconBtn>
+      <IconBtn title="精选集" onClick={onOpenProjects}><Folder size={18} /></IconBtn>
+      <IconBtn title="新建精选集" onClick={() => void createProject()}><Plus size={18} /></IconBtn>
       {tools.map((t) => (
         <IconBtn key={t.mode} title={t.label} active={mode === t.mode}
           onClick={() => setMode(t.mode)}>{<t.icon size={18} />}</IconBtn>

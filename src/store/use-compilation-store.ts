@@ -183,6 +183,8 @@ interface CompilationStore {
   setIsPlaying: (v: boolean) => void;
   setProgress: (partial: Partial<PlayerState>) => void;
   resetProject: () => void;
+  /** 载入项目（T16 多项目切换）：清 saveTimer + 写偏好 + 重置播放器 + 立即落库。 */
+  loadProject: (project: CompilationProject) => void;
 }
 
 const initialPlayer: PlayerState = { isPlaying: false, currentTime: 0, duration: 0, loading: false, volume: 0.8, error: null };
@@ -322,6 +324,25 @@ export const useCompilationStore = create<CompilationStore>()(
         // 旧项目从库中删除（重置 = 全新 demo），新 demo 立即落库并指向新 ID。
         void deleteProject(old.id).catch(() => {});
         flushSave(fresh);
+      },
+
+      /**
+       * 载入项目（T16 多项目切换）。四件事：
+       * 1) M-4：清掉前一项目残留的自动保存防抖——否则旧项目 600ms 后仍会以旧 id 写一次
+       *    writePrefs({ currentProjectId: 旧id })，把当前项目指向覆盖回旧项目（下次 boot 加载错误）。
+       * 2) 写偏好（currentProjectId/theme），切项目即持久化指向。
+       * 3) 重置播放器会话态（isPlaying/currentTime/duration/loading/error）。activeTrackId 随项目；
+       *    audio 引擎本身由调用方先调 use-player-engine 的 stopPlayback 停止（store 不反向依赖 engine）。
+       * 4) 替换 project 后立即 flush 落库，保证切回的项目为最新。
+       */
+      loadProject: (project) => {
+        if (saveTimer) {
+          clearTimeout(saveTimer);
+          saveTimer = null;
+        }
+        writePrefs({ ...readPrefs(), currentProjectId: project.id, theme: project.theme });
+        set({ project, player: initialPlayer });
+        flushSave(project);
       },
     };
   })

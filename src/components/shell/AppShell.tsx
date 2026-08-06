@@ -7,6 +7,7 @@ import { Inspector } from "@/components/editor/Inspector";
 import { Player } from "@/components/player/Player";
 import { MobileHeader } from "./MobileHeader";
 import { MobileEditorSheet } from "./MobileEditorSheet";
+import { ProjectsOverlay } from "@/components/projects/ProjectManager";
 import { ExportCard } from "@/components/export/ExportCard";
 import { exportCardPng } from "@/lib/export-image";
 import { getLatestCoverBake } from "@/lib/export-bake";
@@ -40,6 +41,13 @@ export function AppShell() {
   const isDesktop = useIsDesktop();
   // 导出失败时显示的轻量提示（成功不提示）。
   const [exportError, setExportError] = useState<string | null>(null);
+  // 项目管理面板开关（桌面抽屉 / 移动端 Sheet 共享同一状态与面板）。
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  // 打开项目面板时顺手收起移动端编辑 Sheet，避免两个全屏层叠。
+  const openProjects = () => {
+    setMobileSheetOpen(false);
+    setProjectsOpen(true);
+  };
   // 同步 <html data-theme>：挂载时写一次，之后随 project.theme 变化。
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -104,10 +112,10 @@ export function AppShell() {
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* 桌面：左 rail */}
-      <ProjectRail className="hidden md:flex w-16 shrink-0 border-r border-[var(--line)]" />
+      <ProjectRail className="hidden md:flex w-16 shrink-0 border-r border-[var(--line)]" onOpenProjects={openProjects} />
       {/* 主区 + 移动端头 + 桌面底部 Player */}
       <div className="relative flex-1 flex flex-col min-w-0">
-        <MobileHeader className="md:hidden" />
+        <MobileHeader className="md:hidden" onOpenProjects={openProjects} />
         {/* 桌面：Stage 与 Inspector 并排 */}
         <div className="flex flex-1 min-h-0">
           <motion.main
@@ -124,6 +132,8 @@ export function AppShell() {
         <Player className="md:hidden border-t border-[var(--line)]" />
       </div>
       <MobileEditorSheet />
+      {/* 项目管理面板：桌面贴边抽屉 / 移动端底部 Sheet，同一 open 状态 */}
+      <ProjectsOverlay open={projectsOpen} onClose={() => setProjectsOpen(false)} />
       {/* 隐藏的宣传图节点：position:fixed 移出视口，供 html-to-image 抓取 */}
       <ExportCard />
       {/* 导出失败的轻量提示：固定底栏上方，避免看起来像假按钮 */}

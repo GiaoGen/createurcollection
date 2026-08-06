@@ -114,6 +114,24 @@ function seek(t: number): void {
   useCompilationStore.getState().setProgress({ currentTime: t });
 }
 
+/**
+ * 停止播放并释放音频源（切换项目时调用，防止旧项目音频继续发声/旧曲目残留 src）。
+ * playToken++ 使在途 play 的 post-await 不再写 store（与 next/toggle 防竞态一致）。
+ * 播放器会话态（isPlaying/currentTime/duration）由 loadProject 重置，这里只管引擎本体。
+ */
+export function stopPlayback(): void {
+  playToken++;
+  if (audio) {
+    audio.pause();
+    try {
+      audio.removeAttribute("src");
+      audio.load();
+    } catch {
+      // removeAttribute/load 失败（无媒体源等）：忽略，不影响切项目。
+    }
+  }
+}
+
 export function usePlayerEngine() {
   const activeTrackId = useCompilationStore((s) => s.project.activeTrackId);
   const activeTrack = useCompilationStore((s) =>
