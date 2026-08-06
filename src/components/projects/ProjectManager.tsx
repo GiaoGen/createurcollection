@@ -21,12 +21,14 @@ const CONFIRM_TIMEOUT = 4000;
 export function ProjectManager({ onClose }: { onClose: () => void }) {
   const list = useProjectsStore((s) => s.list);
   const loading = useProjectsStore((s) => s.loading);
+  const error = useProjectsStore((s) => s.error);
   const currentId = useCompilationStore((s) => s.project.id);
   const refresh = useProjectsStore((s) => s.refresh);
   const create = useProjectsStore((s) => s.create);
   const rename = useProjectsStore((s) => s.rename);
   const remove = useProjectsStore((s) => s.remove);
   const open = useProjectsStore((s) => s.open);
+  const clearError = useProjectsStore((s) => s.clearError);
 
   // 内联编辑/确认态（组件层，非 store）：重命名中的行 + 草稿；确认删除中的行。
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -34,10 +36,11 @@ export function ProjectManager({ onClose }: { onClose: () => void }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 面板每次打开刷新列表（db 为准，显示库中真实状态）。
+  // 面板每次打开刷新列表（db 为准，显示库中真实状态）并清掉上次残留的错误。
   useEffect(() => {
+    clearError();
     void refresh();
-  }, [refresh]);
+  }, [refresh, clearError]);
 
   // 进入重命名态后聚焦输入框。
   useEffect(() => {
@@ -98,6 +101,12 @@ export function ProjectManager({ onClose }: { onClose: () => void }) {
           <X size={18} />
         </button>
       </div>
+
+      {error && (
+        <div className="mx-4 mt-2 flex shrink-0 items-center gap-1.5 border-l-2 border-[#dc2626]/60 px-2 py-1 text-xs leading-snug text-[#dc2626]/90">
+          {error}
+        </div>
+      )}
 
       <button
         type="button"

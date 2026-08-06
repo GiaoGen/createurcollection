@@ -13,7 +13,7 @@ import {
 } from "@/types/compilation";
 import { createDemoProject } from "@/data/demo-project";
 import { createId } from "@/lib/storage";
-import { saveProject, getProject, deleteProject } from "./db";
+import { saveProject, getProject } from "./db";
 import { storeImage, dataUrlToBlob } from "@/lib/image/blobs";
 
 /**
@@ -182,7 +182,6 @@ interface CompilationStore {
   setActiveTrack: (id: string | null) => void;
   setIsPlaying: (v: boolean) => void;
   setProgress: (partial: Partial<PlayerState>) => void;
-  resetProject: () => void;
   /** 载入项目（T16 多项目切换）：清 saveTimer + 写偏好 + 重置播放器 + 立即落库。 */
   loadProject: (project: CompilationProject) => void;
 }
@@ -214,6 +213,15 @@ function flushSave(project: CompilationProject): void {
   }
   writePrefs({ ...readPrefs(), currentProjectId: project.id, theme: project.theme });
   void saveProject(project).catch(() => {});
+}
+
+/** 清掉 pending 的自动保存防抖 timer（不落库）。projects store 删除当前项目前调用，
+ *  否则 <600ms 的未保存改动会在 deleteProject 之后以旧对象把已删项目写回（「复活」窗口）。 */
+export function clearAutosaveTimer(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
 }
 
 /**
@@ -259,7 +267,7 @@ async function boot(): Promise<void> {
 }
 
 export const useCompilationStore = create<CompilationStore>()(
-  subscribeWithSelector((set, get) => {
+  subscribeWithSelector((set) => {
     /** 所有项目变更统一更新 updatedAt（供 T16 项目列表按最近编辑排序）。 */
     const bump = (p: CompilationProject): CompilationProject => ({ ...p, updatedAt: Date.now() });
 
@@ -315,16 +323,6 @@ export const useCompilationStore = create<CompilationStore>()(
       setActiveTrack: (activeTrackId) => set((s) => ({ project: bump({ ...s.project, activeTrackId }) })),
       setIsPlaying: (isPlaying) => set((s) => ({ player: { ...s.player, isPlaying } })),
       setProgress: (partial) => set((s) => ({ player: { ...s.player, ...partial } })),
-
-      resetProject: () => {
-        const old = get().project;
-        const fresh = createDemoProject();
-        fresh.theme = readPrefs().theme;
-        set({ project: fresh, player: initialPlayer });
-        // 旧项目从库中删除（重置 = 全新 demo），新 demo 立即落库并指向新 ID。
-        void deleteProject(old.id).catch(() => {});
-        flushSave(fresh);
-      },
 
       /**
        * 载入项目（T16 多项目切换）。四件事：
