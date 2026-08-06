@@ -6,6 +6,7 @@ import { useProjectsStore, type ProjectListItem } from "@/store/use-projects-sto
 import { useCompilationStore } from "@/store/use-compilation-store";
 import { formatRelativeTime } from "@/lib/storage";
 import { useObjectUrl } from "@/lib/image/blobs";
+import { BackupActions } from "@/components/export/BackupActions";
 
 const FADE = { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] } as const;
 const PANEL = { duration: 0.32, ease: [0.22, 1, 0.36, 1] } as const;
@@ -144,6 +145,12 @@ export function ProjectManager({ onClose }: { onClose: () => void }) {
             ))}
           </ul>
         )}
+      </div>
+
+      {/* 备份与恢复（T17）：导出 JSON / ZIP + 导入，纯浏览器文件下载/解析 */}
+      <div className="shrink-0 border-t border-[var(--line)] px-4 py-3">
+        <div className="mb-2 font-mono-num text-xs tracking-widest text-[var(--muted)]">备份与恢复</div>
+        <BackupActions />
       </div>
     </div>
   );
