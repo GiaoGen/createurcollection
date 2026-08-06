@@ -34,7 +34,8 @@ export function TrackEditor() {
             onDrop={(e) => {
               e.preventDefault();
               const from = Number(e.dataTransfer.getData("text/index"));
-              if (from !== i) reorderTracks(from, i);
+              // 防御外部拖入（如图片）：非本列表索引则忽略，避免误排
+              if (Number.isFinite(from) && from >= 0 && from < tracks.length && from !== i) reorderTracks(from, i);
             }}
             onClick={() => setActiveTrack(t.id)}
             className={`group flex items-center gap-2 px-2 py-2 rounded-lg border-b border-[var(--line)] cursor-pointer ${
