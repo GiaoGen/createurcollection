@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useSyncExternalStore, useState } from "react";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { ProjectRail } from "./ProjectRail";
 import { CDStage } from "@/components/stage/CDStage";
 import { Inspector } from "@/components/editor/Inspector";
@@ -42,6 +42,9 @@ export function AppShell() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  // reduced-motion：Stage 位移 spring 压不到（JS spring 不归全局 CSS 管），
+  // 这里改为瞬态。注意与 M-3 一致：useReducedMotion 是挂载快照非实时订阅。
+  const reduced = useReducedMotion();
 
   // Rail 的导出按钮 dispatch `cyc:export` → 渲染隐藏 ExportCard 并下载 PNG。
   useEffect(() => {
@@ -104,7 +107,7 @@ export function AppShell() {
           <motion.main
             className="flex-1 min-h-0 relative"
             animate={{ scale: mobileSheetOpen && !isDesktop ? 0.96 : 1, y: mobileSheetOpen && !isDesktop ? -8 : 0 }}
-            transition={{ type: "spring", stiffness: 260, damping: 28, mass: 0.8 }}
+            transition={reduced ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 28, mass: 0.8 }}
           >
             <CDStage />
           </motion.main>

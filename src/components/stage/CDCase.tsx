@@ -95,6 +95,15 @@ export function CDCase({ face, viewAngleRef }: CDCaseProps) {
   const gl = useThree((s) => s.gl);
   const invalidate = useThree((s) => s.invalidate);
 
+  // Guaranteed wake on face (front/back/disc) switch: tabs only change the
+  // store, they don't touch any primitive prop, so the demand loop stays
+  // asleep and the case keeps its old yaw (both reduced jump-to-target and the
+  // smoothed lerp only run inside useFrame). Invalidate once here; the frame
+  // loop then picks up the new `face` closure and rotates/settles itself.
+  useEffect(() => {
+    invalidate();
+  }, [face, invalidate]);
+
   /* Unified Pointer Events on the canvas DOM element — mouse + touch, one code
      path, zero hover dependency. Single-finger drag rotates; tap = open/close. */
   useEffect(() => {

@@ -1,9 +1,9 @@
 "use client";
 
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useReducedMotion } from "motion/react";
 import * as THREE from "three";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** ~0.5s exponential approach rate for light transitions (1 - e^(-k·dt)). */
 const LERP_K = 4.5;
@@ -70,6 +70,16 @@ export function StageLights({ theme }: { theme: "light" | "dark" }) {
   const keyRef = useRef<THREE.DirectionalLight>(null);
   const fillRef = useRef<THREE.DirectionalLight>(null);
   const hemiRef = useRef<THREE.HemisphereLight>(null);
+  const invalidate = useThree((s) => s.invalidate);
+
+  // Explicit wake on theme change. The JSX light props are pinned to the
+  // mount-time snapshot (never re-applied), so a theme switch produces no
+  // primitive prop diff → R3F's `invalidateInstance` never fires. Without this,
+  // the demand loop stays asleep and the useFrame lerp below never starts. We
+  // invalidate once here; the in-flight lerp keeps the loop alive itself.
+  useEffect(() => {
+    invalidate();
+  }, [theme, invalidate]);
 
   useFrame((state, dt) => {
     const d = Math.min(dt, 0.05);
