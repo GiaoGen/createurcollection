@@ -5,11 +5,11 @@
 
 ## 项目是什么
 
-以**视觉设计与交互动效为核心**的音乐精选集（Compilation Album / Mix CD）创作网站。用户创建一张 CD 精选集，自定义正背面封面、盘面、侧标、曲目，实时查看 3D CD 盒预览并播放曲目。重点不是后台，而是：完成度高的前端视觉、丝滑克制的动效、真实可用的封面编辑器、有质感的 CD 展示。**三小时内可运行、演示、部署。**
+以**视觉设计与交互动效为核心**的音乐精选集（Compilation Album / Mix CD）创作网站。用户创建一张 CD 精选集，自定义正背面封面、盘面、侧标、曲目，实时查看 3D CD 盒预览并播放曲目。重点不是后台，而是：完成度高的前端视觉、丝滑克制的动效、真实可用的封面编辑器、有质感的 CD 展示。目标：完整可运行、可演示、可部署，**用户创建的精选集长期缓存本地**。
 
-### 产品边界（三小时版）
-- **做**：精选集信息编辑、正/背/盘面图片上传+裁剪+缩放+旋转+滤镜、4 种侧标、CD 盒 3D 展示、曲目增删改排序、极简播放器、localStorage 持久化、PNG 导出。
-- **不做**：登录注册、云数据库、评论点赞、作品广场、多用户协作、AI 生成封面、歌词同步、频谱分析、网易云账号登录、会员音乐解析、复杂 WebGL 后处理。**不做任何无法工作的假按钮。**
+### 产品边界
+- **做**：精选集信息编辑、正/背/盘面图片上传+裁剪+缩放+旋转+滤镜、4 种侧标、CD 盒 3D 展示、曲目增删改排序、极简播放器、**IndexedDB 长期持久化**、**本地多项目管理**、**PNG 导出 + JSON/ZIP 备份**、网易云**公开歌单导入/搜索添加/网页播放**。
+- **不做**：任何自有后端（Route Handler/数据库/Supabase/代理/服务端存储）、注册登录、网易云账号登录/私人歌单/红心、会员解灰、云数据库、评论点赞、作品广场、多用户协作、AI 生成封面、歌词同步、频谱分析、复杂 WebGL 后处理。**不做任何无法工作的假按钮。**
 
 ## 技术栈（已安装，勿降级）
 
@@ -23,6 +23,7 @@
 | 3D | three / @react-three/fiber / @react-three/drei | 0.185 / 9.x / 10.x |
 | 图片裁剪 | react-easy-crop | 6.x |
 | 导出 | html-to-image | 1.x |
+| 存储（IndexedDB） | dexie | 4.x |
 | 图标 | lucide-react | 1.x |
 | 包管理 | pnpm | 11.x |
 
@@ -42,8 +43,9 @@ pnpm lint     # ESLint（验收前必须通过）
 
 - **TypeScript**：`strict` 已开；禁止大面积 `any`；类型集中在 `src/types/compilation.ts`。
 - **状态管理**：编辑器状态用 Zustand，`persist` 中间件写 `localStorage`。Store 拆分：Project / Editor / Player / 3D presentation 四个 slice。
-- **音乐 Provider 抽象**：必须走 `lib/music/provider.ts` 的 `MusicProvider` 接口。`DemoMusicProvider` 离线回退（合成 WAV，无外部服务也能完整演示）；`NeteaseProvider` 为主源——自托管 `@neteasecloudmusicapienhanced/api`（社区继任 Binaryify，Node 22+/Docker，默认 :3001），经 `src/app/api/netease/[...path]/route.ts` 服务器端代理，二维码登录→「我喜欢的音乐」/搜索添加→`/song/url/v1` 网页播放。**网易云 cookie 仅存服务端 httpOnly，绝不出现在前端 JS/localStorage**；VIP/版权受限歌曲返回空 URL → 播放禁用并显示「受限」，不做绕过、不开解灰（`ENABLE_GENERAL_UNBLOCK` 默认关，是否开启由用户决定）。需求变更记录：`createyourcollection.md` §三。
-- **图片资源生命周期**：上传图片在进 3D 材质前限制最长边 ≤1600px 并转 Blob；Object URL 必须释放；纹理更新后 `dispose` 旧纹理。
+- **音乐 Provider 抽象**：必须走 `lib/music/provider.ts` 的 `MusicProvider` 接口。`DemoMusicProvider` 离线回退（合成 WAV，无外部服务也能完整演示）；`NeteaseProvider` 为纯前端实现——浏览器直接调第三方网易云 API（Base URL 由 `NEXT_PUBLIC_NETEASE_API_BASE_URL` 配置，统一走 `lib/netease/` 客户端），仅公开内容：搜索、公开歌单导入、曲目信息/封面、`/song/url/v1` 网页播放。**无任何自有后端、无代理、无登录、不存 Cookie、不持久化播放 URL**；VIP/版权受限返回空 URL → 播放禁用并显示「受限」，不做绕过、不开解灰。需求变更记录：`createyourcollection.md` §三。
+- **图片资源生命周期**：上传图片校验类型、限制大小，压缩为 WebP/JPEG（最长边 ≤1600–2048px）后以 Blob 存入 IndexedDB；展示用 Object URL 并在卸载/更换时 revoke；纹理更新后 `dispose` 旧纹理。
+- **存储**：项目数据（含图片 Blob）以 IndexedDB 为主存储（Dexie），申请 `navigator.storage.persist()` 长期缓存；localStorage 只存偏好（当前项目 ID/主题/上次编辑模式）。自动保存防抖 500–1000ms；第三方 API 不可用不影响本地编辑。
 - **高频动画状态**：pointermove / 拖拽旋转等不用 React setState；用 Motion Value / ref / `useFrame`。
 - **按钮必须真实可用**：不允许装饰性假按钮。
 
@@ -117,15 +119,21 @@ src/
 ├─ components/
 │  ├─ shell/             # AppShell / ProjectRail / MobileHeader / MobileEditorSheet
 │  ├─ stage/             # CDStage / CDCase / Disc / StageLights / StageFallback
-│  ├─ editor/            # Inspector / InfoEditor / ArtworkEditor / FilterSelector / SpineEditor / TrackEditor
+│  ├─ editor/            # Inspector / InfoEditor / ArtworkEditor / FilterSelector / SpineEditor / TrackEditor / NeteasePicker
 │  ├─ player/            # Player / Progress / PlayingIndicator
+│  ├─ projects/          # ProjectManager（列表/新建/重命名/删除/备份）
 │  └─ export/            # ExportCard
 ├─ lib/
-│  ├─ image/             # crop / filters / resize
-│  ├─ music/             # types / provider / demo-provider / netease-link-provider
+│  ├─ image/             # crop / filters / resize / blobs
+│  ├─ music/             # types / provider / demo-provider / netease-provider
+│  ├─ netease/           # client / types / normalize / playlist / playback
+│  ├─ backup.ts          # .album.json / ZIP 备份导出导入
 │  ├─ export-image.ts
 │  └─ storage.ts
-├─ store/use-compilation-store.ts
+├─ store/
+│  ├─ db.ts              # Dexie 数据库定义
+│  ├─ use-projects-store.ts
+│  └─ use-compilation-store.ts
 ├─ data/demo-project.ts
 └─ types/compilation.ts
 ```
@@ -134,7 +142,7 @@ src/
 
 ## 验收标准（§十二 摘要）
 
-功能：信息编辑、三类图片上传+裁剪+滤镜、3D 实时显示、曲目增删改排序、至少 1 首 demo 可播、刷新恢复、双主题、双端无横向溢出。视觉：无暖黄/紫蓝光球/多层 Card/胶囊堆叠，CD 舞台是视觉中心，深浅色非简单反转，≥4 种侧标。动效：模式切换无跳变、面板退出有动画、CD 开合自然、唱片不突然启停、移动端拖拽不严重冲突滚动、低性能设备有降级。工程：无大面积 `any`、Provider 抽象、Object URL 正确释放、不存第三方 Cookie、无假按钮、build 与 lint 通过、无持续 Console Error。
+功能：信息编辑、三类图片上传+裁剪+滤镜、3D 实时显示、曲目增删改排序、至少 1 首 demo 可播、刷新恢复、双主题、双端无横向溢出。视觉：无暖黄/紫蓝光球/多层 Card/胶囊堆叠，CD 舞台是视觉中心，深浅色非简单反转，≥4 种侧标。动效：模式切换无跳变、面板退出有动画、CD 开合自然、唱片不突然启停、移动端拖拽不严重冲突滚动、低性能设备有降级。工程：无大面积 `any`、Provider 抽象、图片 Blob 入 IndexedDB + Object URL 正确释放、无任何后端/登录/代理/ Cookie、不持久化播放 URL、无假按钮、build 与 lint 通过、无持续 Console Error。
 
 ## 视觉优先级（冲突时）
 

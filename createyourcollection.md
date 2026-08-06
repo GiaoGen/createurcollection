@@ -137,9 +137,9 @@
 
 ### 7. 本地保存
 
-精选集状态保存到 `localStorage`，刷新页面后恢复。
+精选集数据（含图片 Blob）保存到 **IndexedDB**（主要存储），刷新/重启后恢复，可**长期缓存**（`navigator.storage.persist()` 申请持久存储，防浏览器在空间压力下驱逐）；`localStorage` 只存少量偏好（当前项目 ID、主题、上次编辑模式、是否显示新手引导）。用户作品**不上传任何服务器**。
 
-三小时版本不做：
+MVP 版本不做：
 
 * 注册和登录
 * 云端数据库
@@ -149,74 +149,103 @@
 * 复杂权限系统
 * 正式商业音乐版权接入
 
-### 8. 导出
+### 8. 导出与备份
 
-提供一个简洁的 Export 按钮，将当前 CD 正面展示导出为 PNG。
+**宣传图导出**：提供简洁的 Export 按钮，将当前 CD 正面展示导出为 PNG。使用 `html-to-image` 将指定 DOM 节点转换为 PNG；3D Canvas 无法稳定导出时，用专门的二维 ExportCard 组件生成宣传图。
 
-可以使用 `html-to-image` 将指定 DOM 节点转换为 PNG；该库通过 SVG、Canvas 等浏览器能力生成图像。
-
-如果 3D Canvas 无法稳定直接导出，则使用专门的二维 ExportCard 组件生成宣传图，不要在导出功能上浪费大量时间。
+**项目备份（数据兜底）**：由于数据只存浏览器，必须提供备份能力——导出项目文件（`.album.json`，含项目元数据、曲目列表、图片设置与必要的图片数据），可重新导入恢复；可选 ZIP（`project.json` + `images/front.webp`、`back.webp`、`disc.webp`）。清浏览器数据或换设备时不会完全丢失作品。
 
 ---
 
-# 三、网易云音乐接入方案（2026-08-06 更新）
+# 三、网易云音乐接入方案（2026-08-06 更新 · 纯前端重构）
 
 ## 现实情况
 
-使用**非官方**网易云 API。原 `Binaryify/NeteaseCloudMusicApi` 已归档、npm 包下架；社区活跃继任者为 **`NeteaseCloudMusicApiEnhanced/api-enhanced`**（npm `@neteasecloudmusicapienhanced/api`，Node 22+，默认端口 3000，Docker 可用）。它是第三方逆向接口，非官方开放能力，接口可能随时变化/失效，必须接受这一风险。
-
-本项目使用的功能边界：
-
-* 用户通过**二维码登录**网易云账号（不收集密码）
-* 读取用户**「我喜欢的音乐」**歌单（`playlist_mylike` / `user_playlist` + `playlist_track_all`）
-* **搜索**歌曲（`cloudsearch`）
-* 将歌曲**添加到自己创建的精选集**（保存 `neteaseId` 元数据）
-* 通过 `/song/url/v1` 获取可播放地址，**直接网页播放**
-
-## 架构
+使用**非官方**第三方网易云 API。本项目**不开发、不托管任何后端**：不写 Next.js Route Handler / Server Actions、不建数据库、不保存 Cookie、不代理请求、不自建网易云 API 服务。部署后是**纯前端网站**，浏览器**直接**调用第三方网易云 API。第三方 API 本身是外部服务，不属于本项目后端。
 
 ```
-浏览器(Next.js 前端)
-  │  HTTPS / 同源请求，只走我们自己的 API 路由
-  ▼
-Next.js Route Handlers  src/app/api/netease/[...path]/route.ts   ← 服务器端代理
-  │  持有网易云 cookie（仅服务端 httpOnly cookie，不出现在前端 JS）
-  ▼
-自托管 NeteaseCloudMusicApiEnhanced 服务（独立部署：localhost / Docker，如 :3001）
-  ▼
-网易云音乐服务器
+浏览器(纯前端 Next.js)
+    ↓  直接 fetch（无本服务代理）
+第三方网易云 API（公网可访问，需开启 CORS）
+    ↓
+网易云音乐
 ```
 
-要点：
+第三方逆向接口非官方开放能力，接口可能随时变化/失效，必须接受这一风险。可用 `api-enhanced`（`@neteasecloudmusicapienhanced/api`，Docker 自建需自行开启 CORS）或任选可用的公共实例。
 
-* 前端**不直接连** API 服务，全部经 Next.js route handler 代理；**网易云 cookie 绝不进 localStorage / 前端 JS**。
-* 登录态用我们自己的 httpOnly cookie 维持，服务端按需带上网易云 cookie 转发请求。
-* 音乐来源保持 Provider 抽象（`lib/music/provider.ts`）：`NeteaseProvider` 为主源，`DemoMusicProvider` 为离线回退（无 API 服务时网站仍可完整演示）。
+## API 地址配置
 
-## 登录流程（二维码）
+通过公开前端环境变量配置，**统一读取，禁止多处硬编码**：
 
-1. `/api/netease/login/qr/key` → 获取 key
-2. `/api/netease/login/qr/create?key=...&qrimg=true` → 返回二维码图片 + key
-3. 前端展示二维码，轮询 `/api/netease/login/qr/check?key=...`：
-   - 801 等待扫码 → 802 已扫码待确认 → 803 登录成功（服务端存 cookie）
-   - 800 过期 → 重新生成二维码
-4. 成功后进入「我的网易云」模式：可拉取我喜欢的音乐 / 搜索添加。
+```env
+NEXT_PUBLIC_NETEASE_API_BASE_URL=https://example-api.com
+```
 
-不实现：手机号密码登录（密码不上云）、短信验证码登录。
+所有网易云请求走统一客户端（`src/lib/netease/`）：
 
-## 版权与限制（必须如实对待）
+```text
+src/lib/netease/
+├─ client.ts      # fetch 封装 + Base URL 读取 + 超时/CORS 错误归一化
+├─ types.ts       # 第三方 API 原始返回类型
+├─ normalize.ts   # 原始数据 → 应用 CompilationTrack 结构
+├─ playlist.ts    # 歌单详情/曲目
+└─ playback.ts    # 播放地址
+```
 
-* 很多歌曲是 **VIP / 版权受限**：`/song/url/v1` 返回空或仅试听片段。此时**播放按钮禁用**并显示「VIP 受限 / 无版权」状态，不做绕过。
-* API 自带 `ENABLE_GENERAL_UNBLOCK`（解灰）能力：**默认关闭**，是否开启由用户自行决定并自担风险；本项目功能不依赖它。
-* 不做：批量抓取/下载、外链传播、Cookie 暴露到前端、假装官方接口。
+```ts
+interface NeteaseClient {
+  searchTracks(query: string): Promise<Track[]>;
+  getPlaylist(playlistId: string): Promise<Playlist>;
+  getPlaylistTracks(playlistId: string): Promise<Track[]>;
+  getTrackDetail(trackId: number): Promise<Track | null>;
+  getPlaybackUrl(trackId: number): Promise<string | null>;
+}
+```
+
+## 只支持公开内容（不做登录）
+
+当前 MVP **不做网易云账号登录**。不实现手机号/扫码/Cookie 登录、私人歌单、红心歌曲、账号资料、VIP 权限绕过、解灰、Cookie 保存、登录态同步。
+
+只支持：
+
+* 搜索公开歌曲
+* 导入公开歌单
+* 获取公开歌曲信息与封面
+* 尝试获取可播放地址并在网页内播放
+
+## 公开歌单导入
+
+用户粘贴公开歌单链接（兼容 `https://music.163.com/playlist?id=123456` 与 `https://music.163.com/#/playlist?id=123456`）或直接输入纯数字 ID。流程：
+
+1. 解析歌单 ID
+2. 请求第三方 API
+3. 获取歌单名称、封面、介绍
+4. 获取曲目列表（歌名/歌手/专辑/封面/时长）
+5. 多选歌曲加入当前精选集
+
+## 网页直接播放
+
+使用浏览器原生音频（`new Audio()` 或 `<audio>`）。播放流程：点击 → 读 `providerTrackId` → 请求最新播放地址 → 设 `audio.src` → `play()`。**播放 URL 不持久化**（第三方地址有时效），本地只存歌曲 ID 与元数据；每次播放重新请求，地址失效允许重新请求一次后重试。
+
+## 版权与错误处理（如实对待）
+
+VIP/版权受限/已下架/无地址/地区限制/API 异常/请求超时/CORS 错误/自动播放限制/音频跨域错误/播放地址过期，都必须处理：不崩溃、不无限重试、不连续弹 Toast，在对应歌曲位置显示简洁状态（如「暂时无法播放」「播放地址获取失败」），可提供「在网易云打开」作为降级操作。不开解灰。
+
+## 缓存第三方结果
+
+允许浏览器缓存搜索结果（10–30 分钟）、歌单详情（1–6 小时）、歌曲元数据（24 小时）；播放 URL **不持久化**，仅内存短暂缓存。缓存键如 `netease:playlist:123456` / `netease:track:987654` / `netease:search:周杰伦`。
+
+## 离线行为
+
+无网络时：仍可打开/编辑已保存精选集，本地封面/盘面正常显示，曲目列表可查看；**不尝试播放网易云歌曲、不允许搜索或导入**；显示明确离线状态。第三方 API 不可用不影响本地编辑功能。
 
 ## Provider 边界
 
-`MusicProvider` 接口不变。`NeteaseProvider.getPlayableSource(track)` 调 `/api/netease/song/url/v1?id=<neteaseId>` 取播放 URL；返回 `null` 即视为受限，播放器进入禁用状态。
+`MusicProvider` 抽象不变（`lib/music/provider.ts`）。`NeteaseProvider` 为纯前端实现，内部调用 `NeteaseClient`；`getPlayableSource(track)` 按 `track.provider` 分发（netease → 请求播放地址；demo → 合成 WAV）。返回 `null` 即受限/不可播，播放器进入禁用状态。
 
 ## 后续正式产品方案
 
-音乐数据层保持 Provider 化，以便未来接入正式授权的音乐服务、用户自行上传音频、Apple Music MusicKit（官方 Web SDK，需开发者令牌及用户授权）等。
+音乐数据层保持 Provider 化，未来可接入正式授权的音乐服务、用户自行上传音频等。
 
 ---
 
@@ -243,37 +272,64 @@ Next.js App Router 原生支持布局、路由、Server/Client Components 和 Su
 
 ## 状态管理
 
-使用 Zustand 管理编辑器状态：
+使用 Zustand 管理编辑器状态。建议数据结构：
 
 ```ts
 type CompilationProject = {
   id: string
   title: string
-  subtitle: string
-  curator: string
-  year: string
-  description: string
+  subtitle?: string
+  creator?: string
+  description?: string
+  year?: string
 
-  frontCover: ArtworkState
-  backCover: ArtworkState
+  frontArtwork: ArtworkState
+  backArtwork: ArtworkState
   discArtwork: ArtworkState
 
-  spineStyle: SpineStyle
-  theme: "light" | "dark"
+  spineStyle: string
+  tracks: CompilationTrack[]
 
-  tracks: Track[]
-  activeTrackId: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+type CompilationTrack = {
+  id: string
+  provider: "demo" | "netease"
+  providerTrackId?: number      // 网易云歌曲 ID（netease 源）
+  title: string
+  artist: string
+  album?: string
+  artworkUrl?: string
+  durationMs?: number           // 毫秒
+}
+
+// 图片不以超长 Base64 内嵌进项目 JSON；imageId 引用 IndexedDB 中单独存储的 Blob。
+type ArtworkState = {
+  imageId?: string
+  cropX: number
+  cropY: number
+  zoom: number
+  rotation: number
+  filter: string
+}
+
+type StoredImage = {
+  id: string
+  blob: Blob
+  width: number
+  height: number
+  createdAt: number
 }
 ```
 
-Store 分为：
+Store 分为 Project / Editor / Player / 3D presentation 四个 slice。存储策略：
 
-* Project state
-* Editor state
-* Player state
-* 3D presentation state
+* **IndexedDB（主要，可用 Dexie 简化）**：所有精选集、封面/背面/盘面图片 Blob、压缩后图片、曲目列表、完整项目数据。
+* **localStorage（仅偏好）**：当前项目 ID、深浅主题、上次打开的编辑模式、是否显示新手引导。
 
-使用 Zustand persist middleware 写入 localStorage。Zustand 提供基于 Hooks 的轻量状态管理，并支持持久化等中间件。
+自动保存用防抖：用户停止编辑约 500–1000ms 后将项目写入 IndexedDB，不要每次输入字符都立即高成本写入。
 
 ## 动效
 
@@ -814,33 +870,48 @@ src/
 │  │  ├─ ArtworkEditor.tsx
 │  │  ├─ FilterSelector.tsx
 │  │  ├─ SpineEditor.tsx
-│  │  └─ TrackEditor.tsx
+│  │  ├─ TrackEditor.tsx
+│  │  └─ NeteasePicker.tsx       # 网易云歌单导入/搜索添加（Task 19）
 │  │
 │  ├─ player/
 │  │  ├─ Player.tsx
 │  │  ├─ Progress.tsx
 │  │  └─ PlayingIndicator.tsx
 │  │
-│  └─ export/
-│     └─ ExportCard.tsx
+│  ├─ export/
+│  │  └─ ExportCard.tsx          # 宣传图导出（Task 12）
+│  │
+│  └─ projects/
+│     └─ ProjectManager.tsx      # 本地多项目列表/新建/复制/删除（T16）
 │
 ├─ lib/
 │  ├─ image/
 │  │  ├─ crop.ts
-│  │  ├─ filters.ts
-│  │  └─ resize.ts
+│  │  ├─ art-filters.ts
+│  │  ├─ resize.ts               # 含 WebP/JPEG 压缩、最长边 1600–2048（Task 15）
+│  │  └─ blobs.ts                # Object URL 创建/释放管理（Task 15）
 │  │
 │  ├─ music/
 │  │  ├─ types.ts
 │  │  ├─ provider.ts
 │  │  ├─ demo-provider.ts
-│  │  └─ netease-link-provider.ts
+│  │  └─ netease-provider.ts     # 纯前端实现，内部调用 NeteaseClient（T18）
+│  │
+│  ├─ netease/                   # 统一网易云客户端（T18）
+│  │  ├─ client.ts
+│  │  ├─ types.ts
+│  │  ├─ normalize.ts
+│  │  ├─ playlist.ts
+│  │  └─ playback.ts
 │  │
 │  ├─ export-image.ts
+│  ├─ backup.ts                  # JSON/ZIP 项目备份导出/导入（T17）
 │  └─ storage.ts
 │
 ├─ store/
-│  └─ use-compilation-store.ts
+│  ├─ db.ts                      # Dexie：projects + images 表（Task 15）
+│  ├─ use-compilation-store.ts
+│  └─ use-projects-store.ts      # 多项目列表/当前项目（T16）
 │
 ├─ data/
 │  └─ demo-project.ts
@@ -996,18 +1067,14 @@ src/
 
 三小时内不要开发：
 
-* 登录注册
-* Supabase
-* 社区广场
-* 点赞评论
-* 关注系统
-* 多人协作
-* AI 自动生成封面
-* 歌词同步
-* 音频频谱分析
-* 完整网易云账号登录（仅二维码登录，不实现密码/短信登录）
-* 会员歌曲解灰与绕权（`ENABLE_GENERAL_UNBLOCK` 默认关闭，由用户自行决定）
+* 任何自有后端：Next.js Route Handler / Server Actions / 数据库 / Supabase / 服务端代理 / 服务端文件存储 / 自建网易云 API 服务 / 服务端 Cookie
+* 注册登录、用户账号系统
+* 网易云账号登录（手机号/扫码/Cookie）、私人歌单、红心歌曲、账号资料、登录态同步
+* 会员歌曲解灰与绕权（`ENABLE_GENERAL_UNBLOCK`）
 * 批量抓取/下载/外链传播受版权音频
+* 社区广场、点赞评论、关注系统、多人协作
+* AI 自动生成封面
+* 歌词同步、音频频谱分析
 * 复杂 WebGL 后处理
 * 多页面营销官网
 
@@ -1028,12 +1095,12 @@ src/
 5. 所有按钮必须真实可用，不创建装饰性假按钮。
 6. 不使用暖黄色、紫蓝渐变球或常见 AI 网站视觉。
 7. 不使用多层 Card 和圆角容器嵌套。
-8. 网易云使用自托管 `@neteasecloudmusicapienhanced/api` 服务，经 Next.js route handler 服务器端代理；网易云 cookie 仅存服务端 httpOnly，不出现在前端 JS。
-9. 网易云实现：二维码登录、读取「我喜欢的音乐」、搜索添加、经 `/song/url/v1` 网页播放；VIP/版权受限歌曲禁用播放并如实显示状态，不做绕过。
+8. 网易云为**纯前端集成**：浏览器直接调用第三方 API（Base URL 用 `NEXT_PUBLIC_NETEASE_API_BASE_URL`，统一走 `src/lib/netease/` 客户端，不硬编码域名）；**不开发本项目后端、不代理、不存 Cookie、不登录**。公开歌单导入（链接/纯 ID 解析）+ 搜索 + 多选添加 + 经 `/song/url/v1` 网页播放；VIP/版权受限禁用播放并如实显示，不做绕过。
+9. 所有项目数据（含图片 Blob）存 **IndexedDB**，localStorage 只存少量偏好；自动保存防抖（500–1000ms）；提供项目备份导出/导入；第三方 API 不可用时本地编辑与离线功能仍完整可用；`navigator.storage.persist()` 申请持久存储以长期缓存用户作品。
 10. 使用 DemoMusicProvider 保证项目在无 API Key、无外部服务时仍能完整运行。
 11. 所有高频动画避免 React setState。
 12. 移动端必须提供真实可操作的布局，而不是缩小桌面版。
-13. 实现 localStorage 持久化。
+13. 实现本地多项目管理（创建/列表/打开/重命名/删除，自动保存）。
 14. 完成后运行 lint 和 build。
 15. 修复所有由本次修改引入的 TypeScript、构建和运行错误。
 16. 最终汇报：

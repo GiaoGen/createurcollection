@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 三小时内交付一个可运行的视觉/动效优先的音乐精选集（Mix CD）创作网站：编辑信息与封面、3D CD 盒实时展示、曲目播放、localStorage 持久化、PNG 导出，并部署 Vercel。
+**Goal:** 交付一个可运行的视觉/动效优先的音乐精选集（Mix CD）创作网站：编辑信息与封面、3D CD 盒实时展示、曲目播放、IndexedDB 长期持久化、多项目管理与备份、纯前端网易云公开内容接入，并部署 Vercel。**纯前端、无任何自有后端。**
 
-**Architecture:** Next.js App Router 单页应用。桌面三段式（ProjectRail + CD Stage + Inspector）+ 底部 Player；移动端精简头部 + 全屏 Stage + Bottom Sheet。编辑器状态用 Zustand（persist→localStorage）。3D 用 R3F 单碟 CD 盒组件（参考已安装的 `cd-showcase-3d` skill 的交互/贴图/阻尼模式，不直接复用其单文件 HTML）。图片管线：上传→resize(≤1600px)→crop(react-easy-crop)→filter(12 艺术滤镜，Canvas 像素烘焙，预览降采样+防抖)→CanvasTexture。音乐双源：`DemoMusicProvider`（合成 WAV data URI，离线可完整演示）+ `NeteaseProvider`（自托管 `@neteasecloudmusicapienhanced/api` 经 Next.js 代理，二维码登录→我喜欢的音乐/搜索→网页播放，Task 16-18）。
+**Architecture:** Next.js App Router 单页应用（**纯前端，无任何自有后端**）。桌面三段式（ProjectRail + CD Stage + Inspector）+ 底部 Player；移动端精简头部 + 全屏 Stage + Bottom Sheet。项目数据与图片 Blob 以 IndexedDB（Dexie）为主存储，localStorage 只存偏好（当前项目 ID/主题/上次编辑模式）；自动保存防抖 500–1000ms；`navigator.storage.persist()` 申请长期缓存。3D 用 R3F 单碟 CD 盒组件（参考已安装的 `cd-showcase-3d` skill 的交互/贴图/阻尼模式，不直接复用其单文件 HTML）。图片管线：上传→校验/压缩 WebP/JPEG→crop(react-easy-crop)→filter(12 艺术滤镜，Canvas 像素烘焙，预览降采样+防抖)→CanvasTexture，Blob 入 IndexedDB。音乐双源：`DemoMusicProvider`（合成 WAV data URI，离线可完整演示）+ `NeteaseProvider`（纯前端，浏览器直调第三方网易云 API，仅公开内容，T18-T20）。
 
-**Tech Stack:** Next.js 16.3.0 (App Router) · React 19.2.8 · TypeScript 5.9.3 · Tailwind v4 · zustand 5 · motion 12 · three 0.185 / @react-three/fiber 9 / @react-three/drei 10 · react-easy-crop 6 · html-to-image · lucide-react · pnpm 11
+**Tech Stack:** Next.js 16.3.0 (App Router) · React 19.2.8 · TypeScript 5.9.3 · Tailwind v4 · zustand 5 · motion 12 · three 0.185 / @react-three/fiber 9 / @react-three/drei 10 · react-easy-crop 6 · html-to-image · dexie 4 · lucide-react · pnpm 11
 
 ## Global Constraints
 
@@ -15,8 +15,9 @@
 - 设计 token（写死进 `globals.css`）：浅色 `#f5f5f3/#ffffff/#0a0a0a/#737373`，深色 `#080808/#111111/#f4f4f4/#8a8a8a`，line 用 `rgba` 半透明。
 - 动效曲线（Motion 中复用）：反馈 `{duration:0.18, ease:[0.2,0.8,0.2,1]}`；面板 `{duration:0.32, ease:[0.22,1,0.36,1]}`；物理 `{type:"spring",stiffness:260,damping:28,mass:0.8}`；CD 开合 `{type:"spring",stiffness:110,damping:22,mass:1.1}`。
 - 3D：`<Canvas frameloop="demand" dpr={[1,1.5]}>`；静止停渲；高频角度走 ref/useFrame，禁止 pointermove→setState。
-- 图片：最长边 ≤1600px 转 Blob；Object URL 用后释放；纹理更新 `dispose` 旧纹理。
-- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 离线回退；`NeteaseProvider` 为主源——自托管 `@neteasecloudmusicapienhanced/api`（社区继任 Binaryify，原包已下架），经 Next.js route handler 服务器端代理，网易云 cookie 仅存服务端 httpOnly，绝不出现在前端 JS/localStorage。VIP/版权受限歌曲 `/song/url/v1` 返回 null → 播放禁用并显示「受限」，不做绕过、不开解灰。
+- 图片：上传校验类型/大小，压缩 WebP/JPEG（最长边 ≤1600–2048px）为 Blob 入 IndexedDB；Object URL 用后释放；纹理更新 `dispose` 旧纹理。
+- 存储：项目数据（含图片 Blob）以 IndexedDB 为主存储（Dexie），`navigator.storage.persist()` 申请长期缓存；localStorage 只存偏好。自动保存防抖 500–1000ms；第三方 API 不可用不影响本地编辑/查看。
+- 音乐：统一 `MusicProvider` 抽象；`DemoMusicProvider` 离线回退；`NeteaseProvider` 纯前端——浏览器直调第三方网易云 API（Base URL `NEXT_PUBLIC_NETEASE_API_BASE_URL`，统一 `lib/netease/` 客户端），仅公开内容：搜索/公开歌单导入/曲目信息/封面/`/song/url/v1` 网页播放。**无任何自有后端、无代理、无登录、不存 Cookie、不持久化播放 URL**；VIP/版权受限返回空 URL → 播放禁用并显示「受限」，不做绕过、不开解灰。
 - 无障碍：必须支持 `@media (prefers-reduced-motion: reduce)`。
 - 按钮必须真实可用；移动端不做桌面等比缩放。
 - 验收（§十二）全部通过；`pnpm lint` 与 `pnpm build` 必须通过。
@@ -33,9 +34,9 @@ src/
 │  └─ globals.css             # CSS 变量（明暗主题）+ 基础样式 + 动效降级
 ├─ components/
 │  ├─ shell/
-│  │  ├─ AppShell.tsx         # 三段式组合 + Player + 移动端切换
-│  │  ├─ ProjectRail.tsx      # 左侧 64-80px 图标栏 + Tooltip
-│  │  ├─ MobileHeader.tsx     # 移动端顶部（项目名/主题/更多）
+│  │  ├─ AppShell.tsx         # 三段式组合 + Player + 移动端切换 + 离线监听
+│  │  ├─ ProjectRail.tsx      # 左侧 64-80px 图标栏 + Tooltip + 项目入口
+│  │  ├─ MobileHeader.tsx     # 移动端顶部（项目名/主题/更多/项目入口）
 │  │  └─ MobileEditorSheet.tsx# 移动端编辑 Bottom Sheet
 │  ├─ stage/
 │  │  ├─ CDStage.tsx          # Canvas 容器 + 灯光 + 交互封装 + StageFallback 切换
@@ -46,37 +47,44 @@ src/
 │  ├─ editor/
 │  │  ├─ Inspector.tsx        # 右侧面板容器 + 模式切换动画
 │  │  ├─ InfoEditor.tsx       # 名称/副标题/创建者/年份/简介
-│  │  ├─ ArtworkEditor.tsx    # 上传 + react-easy-crop + 缩放/旋转
+│  │  ├─ ArtworkEditor.tsx    # 上传 + react-easy-crop + 缩放/旋转（压缩入 IndexedDB）
 │  │  ├─ FilterSelector.tsx   # 滤镜网格
 │  │  ├─ SpineEditor.tsx      # 侧标样式选择
-│  │  └─ TrackEditor.tsx      # 曲目增删改 + 拖动排序
+│  │  ├─ TrackEditor.tsx      # 曲目增删改 + 拖动排序 + 网易云添加入口
+│  │  └─ NeteasePicker.tsx    # 网易云添加 UI：公开歌单导入 + 搜索（T19）
 │  ├─ player/
-│  │  ├─ Player.tsx           # 底部播放条 + <audio> 引擎
+│  │  ├─ Player.tsx           # 底部播放条（引擎为模块级单例 use-player-engine）
 │  │  ├─ Progress.tsx         # 可拖动进度条
 │  │  └─ PlayingIndicator.tsx # 当前曲目波形
+│  ├─ projects/
+│  │  └─ ProjectManager.tsx   # 项目列表/新建/重命名/删除/备份入口（T16）
 │  └─ export/
 │     └─ ExportCard.tsx       # 2D 宣传图节点（导出目标）
 ├─ lib/
 │  ├─ image/
 │  │  ├─ resize.ts            # resizeImageToMax / fileToDataUrl
 │  │  ├─ crop.ts              # cropImage(src, cropPixels, rotation)
+│  │  ├─ blobs.ts             # 压缩 WebP/JPEG + Blob↔IndexedDB 工具（T15）
 │  │  └─ art-filters.ts       # 12 艺术滤镜 + bakeFilteredUrl（预览 320 / 烘焙 1600）
 │  ├─ music/
 │  │  ├─ types.ts             # MusicProvider 接口 + Track/PlayableSource
 │  │  ├─ synthesize.ts        # 合成演示 WAV data URI
 │  │  ├─ provider.ts          # getMusicProvider() 单例（demo ↔ netease 切换）
 │  │  ├─ demo-provider.ts     # DemoMusicProvider（离线回退）
-│  │  └─ netease-provider.ts  # NeteaseProvider（Task 16-18 实现）
+│  │  └─ netease-provider.ts  # NeteaseProvider（T18-T20，接 NeteaseClient）
+│  ├─ netease/                # 纯前端网易云客户端（T18）
+│  │  ├─ config.ts            # 读 NEXT_PUBLIC_NETEASE_API_BASE_URL
+│  │  ├─ client.ts            # NeteaseClient：fetch + 超时/错误归一 + 缓存
+│  │  ├─ types.ts             # API 响应类型
+│  │  ├─ normalize.ts         # API → 应用模型 归一
+│  │  ├─ playlist.ts          # 公开歌单链接/ID 解析 + 拉取
+│  │  └─ playback.ts          # 播放 URL 获取 + 内存短缓存 + 过期一次重试
+│  ├─ backup.ts               # .album.json / ZIP 备份导出导入（T17）
 │  ├─ export-image.ts         # toPng(ExportCard node)
-│  └─ storage.ts              # id 生成等小工具（可并入 store）
-├─ app/
-│  └─ api/
-│     └─ netease/
-│        └─ [...path]/route.ts # 服务器端代理 → 自托管 Netease API（cookie httpOnly）
-└─ components/netease/
-   ├─ NeteaseLoginModal.tsx    # 二维码登录弹层（Task 16）
-   └─ TrackSourcePicker.tsx    # 我喜欢的音乐/搜索 添加曲目（Task 17）
+│  └─ storage.ts              # createId / formatTime 等小工具
 ├─ store/
+│  ├─ db.ts                   # Dexie 数据库（projects / storedImages 表，T15）
+│  ├─ use-projects-store.ts   # 项目列表 store（T16）
 │  └─ use-compilation-store.ts
 ├─ data/
 │  └─ demo-project.ts
@@ -527,13 +535,13 @@ export function getMusicProvider(): MusicProvider { return singleton; }
 export function setMusicProvider(p: MusicProvider) { singleton = p; } // 未来切换正式源
 ```
 
-- [ ] **Step 5: `src/lib/music/netease-provider.ts`（壳；真实实现在 Task 16-18）**
+- [ ] **Step 5: `src/lib/music/netease-provider.ts`（壳；真实实现在 T18-T20 纯前端）**
 
 ```ts
 import type { MusicProvider, PlayableSource, TrackMetadata, TrackSearchResult } from "./types";
 import type { Track } from "@/types/compilation";
 
-// 真实实现见 Task 16（后端代理+登录）、17（我喜欢/搜索+Provider）、18（受限状态）。
+// 真实实现见 T18（纯前端 NeteaseClient）、T19（添加 UI）、T20（播放/受限/离线）。
 // 壳：接口齐全、方法返回空/受限，保证编译与离线回退可运行。
 export class NeteaseProvider implements MusicProvider {
   async search(_q: string): Promise<TrackSearchResult[]> { return []; }
@@ -1380,7 +1388,7 @@ git add src/hooks src/components/player && git commit -m "feat: player engine, p
 
 ---
 
-## Task 12: 导出（ExportCard + html-to-image）
+## Task 12: PNG 宣传图导出（ExportCard + html-to-image）
 
 **Files:**
 - Create: `src/components/export/ExportCard.tsx`
@@ -1388,7 +1396,7 @@ git add src/hooks src/components/player && git commit -m "feat: player engine, p
 - Modify: `src/components/shell/AppShell.tsx`（挂 ExportCard 隐藏节点 + 监听 `cyc:export`）
 
 **Interfaces:**
-- Consumes: store `project`；`filters.ts`。
+- Consumes: store `project`；`art-filters.ts`（`bakeFilteredUrl`）。
 - Produces: 2D 宣传图节点（正面封面 + 标题/副标题 + spine 样式 + 滤镜烘焙），`toPng(node, { pixelRatio: 2 })` 下载。
 
 - [ ] **Step 1: `src/lib/export-image.ts`**
@@ -1503,6 +1511,7 @@ git add src/components/shell/MobileEditorSheet.tsx && git commit -m "feat: mobil
 - Modify: `src/components/stage/StageLights.tsx`（明暗 lerp）
 - Modify: `src/components/editor/ArtworkEditor.tsx`（上传占位淡出 + 新图 scale 进入）
 - Modify: `src/components/player/Progress.tsx`（拖动跟手）
+- Modify: `src/components/player/Player.tsx`（移动端实例补顶部分隔线 —— Task 11 遗留 minor）
 
 **Interfaces:**
 - Consumes: 前述全部组件；`prefers-reduced-motion` 通过 `useReducedMotion()`（motion）或 CSS 全局降级。
@@ -1536,17 +1545,271 @@ git add src && git commit -m "feat: core motion polish, theme smoothing, reduced
 
 ---
 
-## Task 15: 验收检查 + 部署准备
+## Task 15: IndexedDB 存储迁移 + Track→CompilationTrack 类型迁移（Dexie + StoredImage + 自动保存）
+
+> 需求变更（2026-08-06）：项目数据与图片 Blob 以 IndexedDB 为主存储（Dexie），localStorage 只存偏好；图片不再以 base64 存 JSON，改存 `imageId` 引用 StoredImage Blob。用户创建的精选集长期缓存（`navigator.storage.persist()`）。
 
 **Files:**
-- 不新增代码；全量检查。
+- Modify: `src/types/compilation.ts`（`CompilationProject` 加 `createdAt/updatedAt`；`ArtworkState.imageUrl` → `imageId`；`Track` → `CompilationTrack`：`provider`/`providerTrackId`/`title`/`artist`/`album?`/`artworkUrl?`/`durationMs?`，去 `src`）
+- Create: `src/store/db.ts`（Dexie：`cyc-db`，表 `projects`、`storedImages`）
+- Create: `src/lib/image/blobs.ts`（`compressImage(file): Promise<Blob>` WebP/JPEG ≤2048px；`storeImage(blob): Promise<StoredImage>`；`getImageUrl(imageId): Promise<string>` Object URL）
+- Modify: `src/store/use-compilation-store.ts`（持久化切到自动保存 IndexedDB；localStorage 只留偏好）
+- Modify: `src/components/editor/ArtworkEditor.tsx`、`src/components/stage/*`、`src/components/export/ExportCard.tsx`、`src/components/editor/TrackEditor.tsx`、`src/hooks/use-player-engine.ts`（消费方按新字段名迁移）
+
+**Interfaces:**
+- Consumes: `src/types/compilation.ts` 新结构；`src/data/demo-project.ts`（首启导入 IndexedDB）。
+- Produces: `db.ts`（`saveProject/getProject/listProjects/deleteProject/saveStoredImage/getStoredImage`）；`useCompilationStore` 自动保存（防抖 500–1000ms）；`navigator.storage.persist()` 申请。
+
+- [ ] **Step 1: 类型迁移**（`compilation.ts`）
+
+```ts
+export type TrackProvider = "demo" | "netease";
+export interface CompilationTrack {
+  id: string;
+  provider: TrackProvider;
+  providerTrackId: string | null;   // netease 歌曲 id；demo 为 null
+  title: string;
+  artist: string;
+  album?: string;
+  artworkUrl?: string;              // 网易云封面（网络 URL，不落库为 blob）
+  durationMs?: number;
+}
+export interface ArtworkState {
+  sourceName: string | null;
+  imageId: string | null;           // → storedImages 表主键；运行时经 getImageUrl 拿 Object URL
+  crop: CropArea;
+  zoom: number;
+  rotation: number;
+  filter: FilterId;
+}
+export interface CompilationProject {
+  id: string;
+  title: string; subtitle: string; curator: string; year: string; description: string;
+  spineStyle: SpineStyle; theme: "light" | "dark";
+  frontCover: ArtworkState; backCover: ArtworkState; discArtwork: ArtworkState;
+  tracks: CompilationTrack[];
+  createdAt: number; updatedAt: number;
+}
+export interface StoredImage { id: string; blob: Blob; width: number; height: number; createdAt: number; }
+```
+
+- [ ] **Step 2: `src/store/db.ts`（Dexie）**
+
+`new Dexie("cyc-db")`，`version(1).stores({ projects: "id, title, updatedAt", storedImages: "id" })`。项目记录含整个 `CompilationProject`（ArtworkState 只带 `imageId`，无 base64）。
+
+- [ ] **Step 3: `src/lib/image/blobs.ts`**
+
+`compressImage(file)`：校验类型（image/*）、`createImageBitmap` 或 `loadImage` 后最长边 ≤2048 等比缩放，`canvas.toBlob("image/webp", 0.85)`（不支持 webp 回落 jpeg）。`storeImage`/`getImageUrl` 封装 DB 读写 + Object URL 生命周期（`revokeObjectUrl` 工具）。
+
+- [ ] **Step 4: store 自动保存**
+
+`useCompilationStore` 去掉 `persist` 的 localStorage 全量持久化；改为订阅 `project` 变更 → 防抖 500–1000ms → `db.saveProject`。App 首启：读 localStorage 偏好 `currentProjectId` → `db.getProject` → 载入；无则 `createDemoProject()` 导入。`navigator.storage.persist()` 启动时调用（幂等）。theme/上次编辑模式等偏好单独小 store 存 localStorage。
+
+- [ ] **Step 5: 消费方迁移**
+
+ArtworkEditor 上传后 `compressImage` → `storeImage` → `setArtwork(face,{imageId})`；预览用 `getImageUrl(imageId)` 的 Object URL（换图/卸载 revoke）。Stage/Export 读 Object URL 渲染纹理/导出。Player 引擎 `durationMs` → 秒换算；demo 曲目 `provider:"demo"`、`providerTrackId:null`。TrackEditor 增删改按新字段。
+
+- [ ] **Step 6: 验证**
+
+`pnpm lint && pnpm build` 通过。浏览器：上传图片 → 刷新保留（IndexedDB 而非 localStorage，DevTools Application 面板确认 storedImages 有 Blob）；`navigator.storage.persist()` resolved true（或 Note 被拒绝仍可用）；重载无 console 错误；旧 localStorage 数据忽略（一次性迁移或丢弃，取 spec 决定）。
+
+- [ ] **Step 7: Commit**
+
+```bash
+pnpm add dexie
+git add src/types src/store/db.ts src/lib/image/blobs.ts src/components src/hooks && git commit -m "feat: indexeddB storage migration with StoredImage blobs and autosave"
+```
+
+---
+
+## Task 16: 本地项目管理（多项目）
+
+> 需求变更（2026-08-06）：用户可创建多个精选集，创建/列表/打开/重命名/删除，自动保存。UI 为纯功能面板（非动效重点）。
+
+**Files:**
+- Create: `src/store/use-projects-store.ts`（项目列表：id/title/updatedAt/封面缩略；actions: create/rename/delete/open）
+- Create: `src/components/projects/ProjectManager.tsx`（列表 + 新建 + 重命名 + 删除 + 打开）
+- Modify: `src/components/shell/ProjectRail.tsx`（项目入口，桌面）
+- Modify: `src/components/shell/MobileHeader.tsx`（项目入口，移动端）
+- Modify: `src/components/shell/AppShell.tsx`（挂载 ProjectManager 弹层/面板）
+
+**Interfaces:**
+- Consumes: `db.ts`（listProjects/saveProject/deleteProject）；`useCompilationStore`（loadProject/saveCurrent）。
+- Produces: 项目切换；新建（默认模板）与删除（确认）；打开即载入 compilation store 并写 `currentProjectId` 偏好。
+
+- [ ] **Step 1: `use-projects-store.ts`**
+
+列表订阅 DB（`db.listProjects()` 排序 updatedAt desc），actions 更新后重查。删除需二次确认（用内联确认态）。
+
+- [ ] **Step 2: `ProjectManager.tsx`**
+
+列表每项：标题 + 更新时间（相对）+ 操作（重命名/删除）。顶部「新建精选集」。点击打开 → `loadProject`。桌面从 ProjectRail 图标进（抽屉或覆盖层，贴边非悬浮 Card），移动端从 MobileHeader 进 Bottom Sheet 复用同一组件。
+
+- [ ] **Step 3: 验证**
+
+`pnpm lint && pnpm build`。浏览器：新建→编辑→列表出现；切项目内容正确载入；重命名/删除生效；刷新后列表与当前项目保持。
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/store/use-projects-store.ts src/components/projects src/components/shell && git commit -m "feat: multi-project management with db-backed list"
+```
+
+---
+
+## Task 17: 项目备份导出/导入（.album.json + 可选 ZIP）
+
+> 需求变更（2026-08-06）：备份导出 `.album.json`（metadata + tracks + 图片设置 + 必要图片数据）；可选 ZIP（project.json + images/front.webp|back.webp|disc.webp）。导入恢复为项目。
+
+**Files:**
+- Create: `src/lib/backup.ts`（exportAlbumJson / importAlbumJson / exportZip / importZip）
+- Create: `src/components/export/BackupActions.tsx`（导出/导入按钮组；或并入 ProjectManager）
+- Modify: `src/store/db.ts`（导入后 saveProject + 图片 Blob 入 storedImages）
+- Modify: `src/components/projects/ProjectManager.tsx`（备份/恢复入口）
+
+**Interfaces:**
+- Consumes: `db.ts`、`blobs.ts`、`export-image.ts`。
+- Produces: `.album.json`（`version`/`meta`/`tracks`/`artwork: { front/back/disc: { 图片 base64, crop, zoom, rotation, filter } }`）；ZIP（**优先 JSZip**，避免手写 ZIP）；导入侧按 ID 去重建项目。
+
+- [ ] **Step 1: `src/lib/backup.ts`**
+
+导出：读当前项目 → 收集三图 Blob → base64 内嵌（json 版）或独立 webp 文件（zip 版）→ 触发下载。导入：`<input type=file accept=".json,.zip,.album.json">` → 解析 → 校验 version → 还原图片到 IndexedDB（新 imageId）→ saveProject。
+
+- [ ] **Step 2: `BackupActions.tsx`**
+
+导出（json / 可选 zip 双按钮）+ 导入（file picker）。样式沿用编辑器控件 token（细线/小字），不弹 Toast。
+
+- [ ] **Step 3: 验证**
+
+导出 json 与 zip 均可下载；删除项目后导入恢复完整（含封面/盘面/曲目）；损坏文件导入报错不崩溃。
+
+- [ ] **Step 4: Commit**
+
+```bash
+pnpm add jszip
+git add src/lib/backup.ts src/components/export/BackupActions.tsx && git commit -m "feat: project backup export/import as json and zip"
+```
+
+---
+
+## Task 18: NeteaseClient 纯前端库
+
+> 需求变更（2026-08-06）：**纯前端**，浏览器直调第三方网易云 API（无后端代理、无登录、无 Cookie）。Base URL 由 `NEXT_PUBLIC_NETEASE_API_BASE_URL` 提供（需 CORS-enabled 的公共实例）。这是纯数据/逻辑库，**无 UI，不需设计确认**。
+
+**Files:**
+- Create: `src/lib/netease/config.ts`（读 `NEXT_PUBLIC_NETEASE_API_BASE_URL`；为空则 netease 能力禁用、回退 demo）
+- Create: `src/lib/netease/types.ts`（API 响应类型：搜索/歌单/歌曲详情/播放 URL）
+- Create: `src/lib/netease/client.ts`（`NeteaseClient`：`searchTracks(q)` / `getPlaylist(id)` / `getPlaylistTracks(id)` / `getTrackDetail(id)` / `getPlaybackUrl(id)`；统一 fetch + 超时（~8s）+ 错误归一 + 缓存）
+- Create: `src/lib/netease/normalize.ts`（API 响应 → 应用模型 `CompilationTrack`/`NeteaseTrackMeta`）
+- Create: `src/lib/netease/playlist.ts`（公开歌单链接/ID 解析：`https://music.163.com/playlist?id=X`、`#/playlist?id=X`、纯数字 ID）
+- Create: `src/lib/netease/playback.ts`（`getPlaybackUrl` 内存短缓存；过期允许一次重试）
+- Modify: `src/lib/music/netease-provider.ts`（真实实现，接 NeteaseClient；无 `providerTrackId` 返回 null）
+- Create: `.env.example`（`NEXT_PUBLIC_NETEASE_API_BASE_URL=...`，注释说明需公共 CORS 实例）
+
+**Interfaces:**
+- Consumes: `src/types/compilation.ts`（`CompilationTrack`）；`MusicProvider` 接口。
+- Produces: `NeteaseClient`；真实 `NeteaseProvider`（`search`/`resolve`/`getPlayableSource`）。缓存策略：搜索 10–30min、歌单 1–6h、曲目详情 24h（内存/IndexedDB 均可）；播放 URL **仅内存短缓存，绝不持久化**（有时效）。
+
+- [ ] **Step 1: `config.ts` + `types.ts`**
+
+`NEXT_PUBLIC_NETEASE_API_BASE_URL` 为空 → `isNeteaseAvailable()` 返回 false，`NeteaseProvider` 退化为空实现（不报错）。类型对齐所选 API 的真实响应字段（`result.songs[]`、`playlist.tracks[]`、`data[0].url` 等）。
+
+- [ ] **Step 2: `client.ts`——统一请求层**
+
+`request<T>(path, params)`：`fetch(base + path + qs)`；`AbortController` 超时；非 2xx / 网络错误 / CORS 错误统一归一为 `NeteaseError { kind: "timeout"|"network"|"api"|"http" , message }`；按 `(path+params)` 查缓存、写入缓存（带 TTL）。
+
+- [ ] **Step 3: `normalize.ts` + `playlist.ts` + `playback.ts`**
+
+`normalizeTrack(raw)` → `{ providerTrackId, title, artist, album, artworkUrl, durationMs }`。`parsePlaylistInput(input)` 从链接/`#/`/裸 ID 提取数字 id。`getPlaybackUrl(id)`：调 `/song/url/v1?id=`；`data[0].url` 空/`null` → 受限返回 null；URL 过期（播放器 404）时允许重取一次。
+
+- [ ] **Step 4: `netease-provider.ts` 真实实现**
+
+`search(q)` → `client.searchTracks(q)` → 归一列表；`resolve(input)` → 解析为歌单或曲目元数据（歌单链接 → 歌单名 + 曲目列表，供批量添加）；`getPlayableSource(track)` → 有 `providerTrackId` 才 `getPlaybackUrl`，无则 null。
+
+- [ ] **Step 5: 验证**
+
+`pnpm lint && pnpm build`。`NEXT_PUBLIC_NETEASE_API_BASE_URL` 配置有效实例时：搜索/歌单拉取/播放 URL 正常返回；未配置时应用照常运行（demo 回退）；网络断开时错误归一正确、不抛未捕获异常。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/netease src/lib/music/netease-provider.ts .env.example && git commit -m "feat: pure-frontend netease client library"
+```
+
+---
+
+## Task 19: 网易云添加 UI（NeteasePicker：公开歌单导入 + 搜索）
+
+> 前端 UI 设计**必须先经用户确认**再实现。
+
+**Files:**
+- Create: `src/components/editor/NeteasePicker.tsx`（公开歌单导入 Tab + 搜索 Tab，多选 → 添加）
+- Modify: `src/components/editor/TrackEditor.tsx`（「从网易云添加」入口按钮）
+- Modify: `src/components/shell/MobileEditorSheet.tsx`（移动端复用同一 picker，无需重写）
+
+**Interfaces:**
+- Consumes: `NeteaseClient`（T18）；store `addTrack`。
+- Produces: 输入公开歌单链接/ID → 预览歌单（封面/名称/曲目列表）；搜索关键词 → 结果列表（封面/歌名/艺术家/时长）；多选 → `addTrack` 批量添加（去重：已存在同 `providerTrackId` 的行标记「已添加」）；受限/加载/空/API 错误状态展示。
+
+- [ ] **Step 1: 交互与状态设计确认**（先向用户展示 ASCII 布局 + 交互流，确认后再实现）
+- [ ] **Step 2: `NeteasePicker.tsx` 实现**
+
+两个入口：① 歌单导入——输入框 + 「解析」→ `parsePlaylistInput` → `getPlaylist`/`getPlaylistTracks` → 列表；② 搜索——关键词 → `searchTracks`。列表行：封面缩略 + 歌名/艺术家 + 时长 + 勾选；底部「添加所选」按钮（禁用当无勾选）。`NeteaseClient` 不可用（未配置 base URL）时显示说明文字而非报错。
+- [ ] **Step 3: TrackEditor 入口**
+
+TrackEditor 加「从网易云添加」按钮 → 打开 NeteasePicker（桌面 Inspector 内联展开或弹层；移动端在 Bottom Sheet 内）。
+- [ ] **Step 4: 验证**
+
+`pnpm lint && pnpm build`。配置 API 后：歌单链接导入成功、搜索命中、批量添加去重、刷新保留（持久化 `providerTrackId`/元数据）；API 不可用时优雅降级。
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/components/editor/NeteasePicker.tsx src/components/editor/TrackEditor.tsx && git commit -m "feat: netease add UI with playlist import and search"
+```
+
+---
+
+## Task 20: 网易云播放 + 受限/离线状态
+
+**Files:**
+- Modify: `src/hooks/use-player-engine.ts`（NetEase 播放：点击 → 读 `providerTrackId` → 请求最新播放 URL → 设 src → play；URL 过期一次重试；受限 → 禁用 + 提示）
+- Modify: `src/components/player/Player.tsx`、`src/components/editor/TrackEditor.tsx`（受限/加载/离线状态显示；「在网易云打开」fallback）
+- Modify: `src/components/shell/AppShell.tsx`（`online`/`offline` 监听 → 离线态显示）
+
+**Interfaces:**
+- Consumes: `NeteaseProvider`/`getPlaybackUrl`（T18）、播放引擎（T11）、store。
+- Produces: 网易云曲目可真实播放；VIP/版权/区域受限显示「暂时无法播放/受限」；错误处理不崩溃、不无限重试、不 toast 轰炸；离线显示提示。
+
+- [ ] **Step 1: 引擎受限与重试**
+
+`play()`：`getPlayableSource` 返回 null → 显示受限（`player.limitedTrackId` 或 per-track 状态）并 `setIsPlaying(false)`；`<audio>` error 事件 → 若是网易云 URL 且未重试过 → 重取一次播放 URL；仍失败 → 停止 + 提示。**不自动连播受限曲目**。
+
+- [ ] **Step 2: 错误与状态 UI**
+
+播放器当前曲目：受限 → 「受限 · 在网易云打开」（`https://music.163.com/song?id=<id>` 新窗口）；TrackEditor 受限行右侧小字「受限」。离线（`navigator.onLine=false`）：网易云行显示「离线」，本地 demo/已缓存仍可播。
+
+- [ ] **Step 3: 验证**
+
+`pnpm lint && pnpm build`。配置 API 后：公开曲目可播（进度/唱片联动）；受限曲目播放禁用 + 提示；断网时网易云曲目不可播但 demo 正常；连点不崩、无重复 toast。
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/hooks/use-player-engine.ts src/components/player src/components/editor/TrackEditor.tsx src/components/shell && git commit -m "feat: netease playback with restricted and offline states"
+```
+
+---
+
+## Task 21: 验收检查 + 部署准备
+
+**Files:**
+- 不新增代码；全量检查 + `README.md` 更新。
 
 **Interfaces:**
 - Consumes: 全部。
 
-- [ ] **Step 1: 全量验收（spec §十二）**
+- [ ] **Step 1: 全量验收（spec §十二 + 新需求）**
 
-`pnpm dev` 下逐项：1440×900 与 390×844 双端、浅/深主题、上传裁剪滤镜、刷新恢复、音频播放、CD 拖动、无图占位、`prefers-reduced-motion`、Console 无持续报错、双端无横向溢出、4 种侧标、正/背/盘面实时映射。
+`pnpm dev` 下逐项：1440×900 与 390×844 双端、浅/深主题、上传裁剪滤镜、刷新恢复（IndexedDB 图片 + 项目）、多项目创建/切换/重命名/删除、备份导出（json/zip）→ 删除 → 导入恢复、离线编辑/查看、音频播放（demo + 网易云公开曲目）、受限提示、CD 拖动、无图占位、`prefers-reduced-motion`、Console 无持续报错、双端无横向溢出、4 种侧标、正/背/盘面实时映射。
 
 - [ ] **Step 2: 构建与 lint**
 
@@ -1554,11 +1817,11 @@ Run: `pnpm lint`（Expected: 通过）与 `pnpm build`（Expected: 成功，无 
 
 - [ ] **Step 3: 已知限制记录**
 
-写 `README.md`：网易云部分仅链接解析 + Provider 边界；Demo 音频为合成旋律（非真实版权音乐）；导出为 2D 宣传图（3D Canvas 不做直接导出）；无注册/云存储。
+写 `README.md`：网易云为纯前端公开内容接入（`NEXT_PUBLIC_NETEASE_API_BASE_URL` 需公共 CORS 实例；无登录/私人歌单/红心；播放 URL 有时效不持久化）；Demo 音频为合成旋律（非真实版权音乐）；导出为 2D 宣传图；数据存本机 IndexedDB（跨设备靠备份导出/导入）；无注册/云存储/云同步。
 
 - [ ] **Step 4: 部署（可选，需用户授权）**
 
-`npx vercel` 关联并部署；或先 `git init` + push 到远程后由 Vercel 拉取。部署需用户交互授权，放到最后与用户确认。
+`npx vercel` 关联并部署；或先 `git init` + push 到远程后由 Vercel 拉取。部署需用户交互授权，放到最后与用户确认。部署环境需配置 `NEXT_PUBLIC_NETEASE_API_BASE_URL`。
 
 - [ ] **Step 5: 收尾汇报**
 
@@ -1566,124 +1829,11 @@ Run: `pnpm lint`（Expected: 通过）与 `pnpm build`（Expected: 成功，无 
 
 ---
 
-### Task 16: NetEase 后端代理 + 二维码登录
-
-> 需求变更（2026-08-06）：使用非官方 `@neteasecloudmusicapienhanced/api`，登录后读取「我喜欢的音乐」、搜索添加、直接网页播放。前端 UI 设计**必须先经用户确认**再实现。
-
-**Files:**
-- Create: `src/app/api/netease/[...path]/route.ts`（服务器端代理，httpOnly cookie）
-- Create: `src/lib/netease/config.ts`（API 基址：`NETEASE_API_URL`，默认 `http://localhost:3001`）
-- Create: `src/store/use-netease-store.ts`（登录态：status/nickname/uid/avatarUrl/likedPlaylist 加载态）
-- Create: `src/components/netease/NeteaseLoginModal.tsx`（二维码登录弹层）
-- Modify: `src/components/shell/AppShell.tsx`（登录入口 + 模态挂载）
-
-**Interfaces:**
-- Consumes: `src/lib/music/types.ts`（Task 4）；自托管 API 服务（用户另行部署，Docker `moefurina/ncm-api` 或本地跑）。
-- Produces: 代理路由 `GET/POST /api/netease/[...path]`；登录态 store；`NeteaseLoginModal` 的三步二维码流程。
-
-- [ ] **Step 1: 代理路由 `src/app/api/netease/[...path]/route.ts`**
-
-转发到 `NETEASE_API_URL`；登录成功（`login/qr/check` 返回 803）时把 body 里的网易云 cookie 写进 httpOnly cookie `cyc_ncm_cookie`；其余请求从该 cookie 读出并作为转发时的 cookie 参数带上。响应原样返回前端。CORS 不需要（同源）。
-
-- [ ] **Step 2: `src/store/use-netease-store.ts`**
-
-```ts
-interface NeteaseState {
-  status: "anonymous" | "waiting" | "scanned" | "logged" | "expired";
-  key: string | null;
-  nickname: string | null;
-  uid: number | null;
-  avatarUrl: string | null;
-  setStatus; setKey; setProfile; logout; // actions
-}
-```
-
-- [ ] **Step 3: `NeteaseLoginModal`——二维码登录三步**
-
-调用顺序（全部走 `/api/netease/` 代理）：
-`/login/qr/key` → 拿 key；`/login/qr/create?key=<key>&qrimg=true` → 拿二维码图片 dataURL；轮询 `/login/qr/check?key=<key>`（2s 间隔）：
-- `code 801` 等待扫码（UI：提示"打开网易云 App 扫码"）
-- `code 802` 已扫码待确认
-- `code 800` 过期 → 重新生成
-- `code 803` 成功 → 代理存 cookie → `setProfile` 并关闭弹层
-
-登录后顶部显示头像/昵称，提供「退出登录」（清 cookie：代理 `DELETE /api/netease/session` 或调用 `/logout`）。
-
-- [ ] **Step 4: 验证**
-
-`pnpm build` 通过。联调需自托管 API 服务（用户本地起 `localhost:3001`）：扫码登录成功、cookie 已存 httpOnly、刷新保持登录。
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/app/api/netease src/lib/netease src/store src/components/netease && git commit -m "feat: netease backend proxy and qr login"
-```
-
-### Task 17: NeteaseProvider + 我喜欢/搜索 添加 UI
-
-> 前端 UI 设计**必须先经用户确认**再实现。
-
-**Files:**
-- Modify: `src/types/compilation.ts`（`Track` 增 `neteaseId?: string`、`album?: string`、`coverUrl?: string`）
-- Modify: `src/lib/music/netease-provider.ts`（真实实现）
-- Create: `src/components/editor/TrackSourcePicker.tsx`（Tab：我喜欢的音乐 / 搜索）
-- Modify: `src/components/editor/TrackEditor.tsx`（「从网易云添加」入口）
-
-**Interfaces:**
-- Consumes: Task 16 代理 + 登录态；store `addTrack`。
-- Produces: 真实 `NeteaseProvider`（`search` → `/api/netease/cloudsearch`；`getPlayableSource` → `/api/netease/song/url/v1?id=<neteaseId>`）；`TrackSourcePicker` 点选歌曲 → `addTrack({ id, title, artist, duration, src: "", neteaseId, coverUrl, album })`。
-
-- [ ] **Step 1: Track 类型扩展**（`neteaseId`/`album`/`coverUrl` 可选字段，`src` 保持空串由 provider 解析）。
-- [ ] **Step 2: `NeteaseProvider` 真实实现**
-
-`search(q)` → `/api/netease/cloudsearch?keywords=<q>` 映射结果；`getPlayableSource(track)` → 有 `neteaseId` 才请求 `/api/netease/song/url/v1?id=<id>`，`data[0].url` 为空/`null` 即受限返回 `null`；无 `neteaseId` 返回 `null`。
-
-- [ ] **Step 3: `TrackSourcePicker`**——双 Tab
-
-「我喜欢的音乐」：`/api/netease/playlist/mylike`（或 `user_playlist`+`playlist_track_all`）拉取列表，显示封面/歌名/艺术家/时长，点击行 → 添加到当前精选集（去重：已存在 `neteaseId` 的曲目行标记「已添加」）。「搜索」：输入关键词 → `/api/netease/cloudsearch?keywords=` → 同上添加。未登录时展示「去登录」按钮（唤起 NeteaseLoginModal）。移动端复用同一组件（Bottom Sheet 内）。
-
-- [ ] **Step 4: 验证**
-
-`pnpm build` 通过；联调：登录后拉到我喜欢的音乐、搜索命中、添加成功且刷新保留（`neteaseId` 持久化）。
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/types src/lib/music/netease-provider.ts src/components/editor && git commit -m "feat: netease provider with liked-songs and search picker"
-```
-
-### Task 18: 播放器受限状态 + NetEase 播放联调
-
-**Files:**
-- Modify: `src/hooks/use-player-engine.ts`（`getPlayableSource` 返回 null → 受限禁用；真实 URL 播放）
-- Modify: `src/components/player/Player.tsx`、`src/components/editor/TrackEditor.tsx`（受限行显示「VIP 受限 / 无版权」，播放按钮禁用）
-
-**Interfaces:**
-- Consumes: `NeteaseProvider`、Task 11 播放引擎、store。
-- Produces: 受限状态在播放器与曲目行的可见反馈；NetEase 歌曲可真实播放。
-
-- [ ] **Step 1: 引擎受限处理**
-
-`play()` 里 `getPlayableSource` 返回 `null` → `setRestricted(true)` 并 `setIsPlaying(false)`，不在 UI 上假装可播；成功则照常播放。`restricted` 状态入 store（player slice）。
-
-- [ ] **Step 2: UI 反馈**——播放器当前曲目标记「VIP 受限」；TrackEditor 受限行右侧小字提示 + 禁用播放图标。
-
-- [ ] **Step 3: 验证**
-
-联调：登录后播放我喜欢的歌曲成功（唱片旋转/进度走动）；把一首 VIP 受限歌曲加入后播放按钮禁用并提示；刷新保持状态。`pnpm lint && pnpm build` 通过。
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/hooks src/components/player src/components/editor && git commit -m "feat: netease playback with restricted-state handling"
-```
-
 ## Self-Review 备注
 
-- 与 spec §十一 时间表对齐：Task1-4=00:00–00:15 初始化（脚手架+类型+store+demo）；Task5-6=00:15–00:45 骨架；Task7=00:45–01:25 CD 展示（20 分钟接不上则 StageFallback CSS 3D）；Task8-9=01:25–02:00 图片编辑；Task10-11=02:00–02:25 曲目+播放器；Task12-14=02:25–02:45 动效；Task15=02:45–03:00 检查部署。
+- **执行顺序（2026-08-06 重新划分）**：T12-T14 = 批 A 前段（导出/移动端/动效收尾）；T15-T17 = 存储与数据层（IndexedDB 迁移 → 多项目 → 备份），承接 `createyourcollection.md` §二.7/§二.8/§四 新结构；T18-T20 = 纯前端网易云（库 → 添加 UI → 播放/受限/离线）；T21 = 验收 + 部署。
+- **纯前端边界**：无任何 Route Handler / Server Actions / 数据库 / 代理 / 登录 / Cookie；网易云 cookie 绝不存在于前端；播放 URL 仅内存短缓存、不持久化。VIP/版权受限返回空 URL → 禁用播放并显示「受限」，不开解灰。
+- **设计确认要求（用户硬性）**：T19（网易云添加 UI）必须先向用户展示 ASCII 设计并确认再实现；其余纯功能/数据层任务（T15-T18）不需要。
 - cd-showcase-3d skill 不直接复用其单文件 HTML/MiniMax 环境，仅提炼交互模式与踩坑清单（§十一 兜底条款）。
 - `frameloop="demand"`、`dpr={[1,1.5]}`、Object URL 释放、纹理 dispose、高频角度走 ref——已在 Task 7/8 落实 §九。
-- 播放不自动播放、`track.src` 为空即静默跳过（无假按钮）——Task 11。
-- **NetEase 集成（Task 16-18，需求变更 2026-08-06）**：执行顺序在 Task 4 之后跑 16-17（登录/代理/Provider/来源选择器），Task 11 之后跑 18（受限状态联调）。涉及前端 UI（登录弹层、曲目来源选择器、受限状态反馈）的设计**必须先经用户确认再实现**（用户明确要求）。
-- 网易云 cookie 仅服务端 httpOnly；VIP/版权受限歌曲 `/song/url/v1` 返回空 → 禁用播放并显示「受限」，不开解灰。
-- **NetEase 已确认决策（2026-08-06）**：① NetEase UI 按建议设计（登录弹层 + 我喜欢的音乐/搜索 双 Tab 来源选择器，点行添加/已添加标记/VIP 标记）；② 解灰保持关闭——fork 默认 `ENABLE_GENERAL_UNBLOCK=true`，部署文档/`.env.example` 必须显式设 `false`；③ API 服务开发期指向 `localhost:3001`（`NETEASE_API_URL` 可配，部署方式后续定）。
+- 播放不自动播放、无源即静默跳过/受限提示（无假按钮）——Task 11/20。
