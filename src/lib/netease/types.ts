@@ -127,6 +127,11 @@ export interface NeteasePlaylistDetailResponse extends NeteaseApiResponse {
   };
 }
 
+/** /song/detail 批量取歌曲详情（我喜欢的音乐用）。 */
+export interface NeteaseSongDetailResponse extends NeteaseApiResponse {
+  songs?: NeteaseSong[];
+}
+
 /** /song/url/v1 与 /song/url 的单条数据项。 */
 export interface NeteasePlaybackItem {
   id?: number;

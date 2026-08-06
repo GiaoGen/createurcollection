@@ -1,6 +1,8 @@
 "use client";
-import { Plus, GripVertical, Trash2 } from "lucide-react";
+import { CloudDownload, Plus, GripVertical, Trash2 } from "lucide-react";
 import { useCompilationStore } from "@/store/use-compilation-store";
+import { useNeteaseStore } from "@/store/use-netease-store";
+import { isNeteaseAvailable } from "@/lib/netease/client";
 import type { CompilationTrack } from "@/types/compilation";
 import { createId, formatTime } from "@/lib/storage";
 import { PlayingIndicator } from "@/components/player/PlayingIndicator";
@@ -11,6 +13,9 @@ export function TrackEditor() {
   const isPlaying = useCompilationStore((s) => s.player.isPlaying);
   // 动作经 getState 取稳定引用，避免每帧重渲染；数据订阅如上两行。
   const { updateTrack, removeTrack, addTrack, setActiveTrack, reorderTracks } = useCompilationStore.getState();
+  const setPickerOpen = useNeteaseStore((s) => s.setPickerOpen);
+  // API 未配置时隐藏入口（不做假按钮）；picker 层另有说明文字兜底。
+  const neteaseAvailable = isNeteaseAvailable();
 
   const add = () => {
     const t: CompilationTrack = {
@@ -93,6 +98,14 @@ export function TrackEditor() {
         className="w-full py-2 text-sm text-[var(--muted)] border border-dashed border-[var(--strong-line)] rounded-lg flex items-center justify-center gap-1">
         <Plus size={14} /> 添加曲目
       </button>
+      {neteaseAvailable && (
+        <button
+          type="button"
+          onClick={() => setPickerOpen(true)}
+          className="w-full py-2 text-sm text-[var(--foreground)] border border-[var(--strong-line)] rounded-lg flex items-center justify-center gap-1">
+          <CloudDownload size={14} /> 从网易云添加
+        </button>
+      )}
     </div>
   );
 }

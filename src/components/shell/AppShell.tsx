@@ -8,6 +8,7 @@ import { Player } from "@/components/player/Player";
 import { MobileHeader } from "./MobileHeader";
 import { MobileEditorSheet } from "./MobileEditorSheet";
 import { ProjectsOverlay } from "@/components/projects/ProjectManager";
+import { NeteasePicker } from "@/components/editor/NeteasePicker";
 import { ExportCard } from "@/components/export/ExportCard";
 import { exportCardPng } from "@/lib/export-image";
 import { getLatestCoverBake } from "@/lib/export-bake";
@@ -134,6 +135,8 @@ export function AppShell() {
       <MobileEditorSheet />
       {/* 项目管理面板：桌面贴边抽屉 / 移动端底部 Sheet，同一 open 状态 */}
       <ProjectsOverlay open={projectsOpen} onClose={() => setProjectsOpen(false)} />
+      {/* 网易云添加：桌面居中弹层 / 移动端底部 Sheet，z-[60] 盖于编辑 Sheet 与项目面板之上 */}
+      <NeteasePicker />
       {/* 隐藏的宣传图节点：position:fixed 移出视口，供 html-to-image 抓取 */}
       <ExportCard />
       {/* 导出失败的轻量提示：固定底栏上方，避免看起来像假按钮 */}

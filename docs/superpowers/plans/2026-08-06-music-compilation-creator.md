@@ -1760,7 +1760,7 @@ git add src/lib/netease src/lib/music/netease-provider.ts .env.example && git co
 - Consumes: `auth`（T18）、`NeteaseClient`（T18）、store `addTrack`。
 - Produces: 登录弹层（QR 图 + 状态文字 + 记住登录勾选 + 固定安全提示文案）；登录后「我喜欢的音乐」与「我的歌单」列表 + 搜索；单选/多选/全选 → 批量 `addTrack`（去重：同 `providerTrackId` 标记「已添加」）；Cookie 失效 → 提示重新登录，**不删除已导入歌曲**；受限/加载/空/API 错误状态展示。
 
-- [ ] **Step 1: 交互与状态设计确认**（向用户展示 ASCII：登录弹层 + 来源面板布局与交互流，确认后再实现）
+- [ ] **Step 1: 交互与状态设计确认**（✅ 2026-08-07 已确认：**桌面=居中弹层**（半透明暗化背景 + 中央面板，非右抽屉）；**登录区内嵌面板**——未登录时 picker 主体即登录区，登录成功后同一面板切到三来源 Tab；移动端=底部 Sheet。TrackEditor 底部「从网易云添加」入口按钮；行勾选 + 顶部全选 + 底部「添加所选（N）」禁用态；已添加按 providerTrackId 去重标记）
 - [ ] **Step 2: `use-netease-store.ts`**
 
 登录态订阅 store：`{ status: "anonymous"|"pending"|"logged-in"|"expired", nickname, avatarUrl, userId, remember }` + `login/refreshUser/logout`。挂载时 `loadSession()`（sessionStorage 优先，IndexedDB 回退）。

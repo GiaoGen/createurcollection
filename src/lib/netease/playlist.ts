@@ -6,6 +6,7 @@ import { normalizeTrack } from "./normalize";
 import type {
   NeteaseLikelistResponse,
   NeteasePlaylistDetailResponse,
+  NeteaseSongDetailResponse,
   NeteaseUserPlaylistResponse,
 } from "./types";
 import type { CompilationTrack } from "@/types/compilation";
@@ -56,6 +57,26 @@ export async function getPlaylistTracks(
   });
   const tracks = body.playlist?.tracks;
   return Array.isArray(tracks) ? tracks.map(normalizeTrack) : [];
+}
+
+/** /song/detail 批量取详情（「我喜欢的音乐」用）；按 50 分块。带 cookie。缺失 id 跳过。 */
+export async function getSongsByIds(ids: number[], cookie: string): Promise<CompilationTrack[]> {
+  if (ids.length === 0) return [];
+  const CHUNK = 50;
+  const out: CompilationTrack[] = [];
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const body = await neteaseClient.request<NeteaseSongDetailResponse>("/song/detail", {
+      params: { ids: chunk.join(",") },
+      cookie,
+    });
+    if (Array.isArray(body.songs)) {
+      for (const s of body.songs) {
+        if (typeof s?.id === "number") out.push(normalizeTrack(s));
+      }
+    }
+  }
+  return out;
 }
 
 /**
